@@ -74,7 +74,13 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
 
             if args.verbose {
                 if args.precompute {
-                    eprintln!("Precomputing frames at {}x{}...", cw, rch);
+                    let msg = format!("Precomputing frames at {}x{}...", cw, rch);
+                    let max_cols = cw.saturating_sub(1) as usize;
+                    let msg: String = msg.chars().take(max_cols).collect();
+                    let banner = format!("\x1b[1;1H\x1b[2K{}", msg);
+                    let raw = stdout.get_mut();
+                    raw.write_all(banner.as_bytes()).ok();
+                    raw.flush().ok();
                 } else {
                     eprintln!("Decoding and rendering frames at {}x{}...", cw, rch);
                 }
