@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 const RESET: &str = "\x1b[0m\n";
+const RESET_LAST: &str = "\x1b[0m";
 
 #[inline(always)]
 fn ansi_rgb(buf: &mut String, r: u8, g: u8, b: u8) {
@@ -61,7 +62,11 @@ pub fn render_opaque(
             }
             out.push('█');
         }
-        out.push_str(RESET);
+        if y + 1 < out_h {
+            out.push_str(RESET);
+        } else {
+            out.push_str(RESET_LAST);
+        }
     }
 
     out
@@ -137,7 +142,11 @@ pub fn render_alpha(
                 out.push('█');
             }
         }
-        out.push_str(RESET);
+        if y + 1 < out_h {
+            out.push_str(RESET);
+        } else {
+            out.push_str(RESET_LAST);
+        }
     }
 
     out
