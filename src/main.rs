@@ -18,14 +18,16 @@ fn console_wh() -> (u64, u64) {
     }
 }
 
-fn compute_output_dims(iw: u32, ih: u32, tw: u64, th: u64) -> (u64, u64) {
-    let h_from_w = ((tw as f64 * ih as f64 * 10.0) / (iw as f64 * 22.0))
+fn compute_output_dims(iw: u32, ih: u32, tw: u64, th: u64, cw_px: u32, ch_px: u32) -> (u64, u64) {
+    let cw_px = cw_px.max(1) as f64;
+    let ch_px = ch_px.max(1) as f64;
+    let h_from_w = ((tw as f64 * ih as f64 * cw_px) / (iw as f64 * ch_px))
         .round()
         .max(1.0) as u64;
     if h_from_w <= th {
         (tw, h_from_w)
     } else {
-        let w_from_h = ((th as f64 * iw as f64 * 22.0) / (ih as f64 * 10.0))
+        let w_from_h = ((th as f64 * iw as f64 * ch_px) / (ih as f64 * cw_px))
             .round()
             .max(1.0)
             .min(tw as f64) as u64;
@@ -72,7 +74,7 @@ fn render_static(args: &cli::Args, bg: (u8, u8, u8)) {
     let (iw, ih) = img.dimensions();
     let (cw, ch) = console_wh();
     let rch = ch.saturating_sub(args.reserve).max(1);
-    let (out_w, out_h) = compute_output_dims(iw, ih, cw, rch);
+    let (out_w, out_h) = compute_output_dims(iw, ih, cw, rch, args.cell_width, args.cell_height);
     let cells = (out_w * out_h) as usize;
 
     if args.verbose {
@@ -144,7 +146,7 @@ fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::Media
             }
             cache.clear();
 
-            let stream = frames::open_stream(path, &media_type).unwrap_or_else(|e| {
+            let stream = frames::open_stream(path, &media_type, args.prefetch).unwrap_or_else(|e| {
                 eprintln!("{}", e);
                 std::process::exit(1);
             });
@@ -184,7 +186,7 @@ fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::Media
                 };
 
                 let frame_start = Instant::now();
-                let (out_w, out_h) = compute_output_dims(frame.width, frame.height, cw, rch);
+                let (out_w, out_h) = compute_output_dims(frame.width, frame.height, cw, rch, args.cell_width, args.cell_height);
                 let render_start = Instant::now();
                 let ansi = render_frame(
                     &frame.rgba,
@@ -196,18 +198,23 @@ fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::Media
                     args.opaque,
                 );
                 let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-                let delay_ms = frame.delay_ms;
+                // Apply fps limit: if the user requested a lower fps, use a longer delay.
+                let delay_ms = if args.fps_limit > 0 {
+                    frame.delay_ms.max(1000 / args.fps_limit.max(1))
+                } else {
+                    frame.delay_ms
+                };
                 // `frame` (and its RGBA buffer) is dropped here.
 
-                cache.push((ansi, cw, rch, delay_ms));
+                if !args.no_cache {
+                    cache.push((ansi.clone(), cw, rch, delay_ms));
+                }
                 rendered_frames += 1;
 
                 // In non-precompute mode display each frame as it is rendered
                 // so the first pass doubles as live playback.
                 if !args.precompute {
                     frames_shown += 1;
-                    let i = cache.len() - 1;
-                    let ansi = &cache[i].0;
 
                     let mut buf = Vec::with_capacity(ansi.len() + 256);
                     buf.extend_from_slice(b"\x1b[H");
@@ -224,7 +231,7 @@ fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::Media
                             if delay_ms > 0 { 1000.0 / delay_ms as f64 } else { 0.0 };
                         let status = format!(
                             "frame {} | loop {} | FPS: {:.1}/{:.1} | render: {:.1}ms | rendered: {} dropped: {}",
-                            i + 1,
+                            frames_shown,
                             loop_count,
                             actual_fps,
                             target_fps,

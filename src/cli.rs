@@ -11,32 +11,101 @@ use std::path::PathBuf;
     arg_required_else_help = true
 )]
 pub struct Args {
-    /// Path to the input image
+    /// Path to the image, GIF, or video file to render in the terminal
     pub image: PathBuf,
 
-    /// Lines to reserve at the bottom of the terminal
-    #[arg(short = 'r', long = "reserve", default_value_t = 2)]
-    pub reserve: u64,
+    // ── Display ────────────────────────────────────────────────────────────
 
-    /// Background color (e.g. 15161c, #abc, 0xff00ff, rgb(255,0,128), hsl(270,50%,50%), etc.)
-    #[arg(short = 'b', long = "background", default_value = "#15161c")]
+    /// Color to show behind transparent areas of the image.
+    /// Accepts most CSS color formats: #15161c, #abc, rgb(21,22,28),
+    /// hsl(235,14%,10%), hwb(), lab(), lch(), oklab(), oklch().
+    /// This only visibly affects images with transparency (PNG, WebP, GIF).
+    #[arg(short = 'b', long = "background", default_value = "#15161c",
+          help_heading = "Display")]
     pub background: String,
 
-    /// Verbose output
-    #[arg(short = 'v', long = "verbose")]
-    pub verbose: bool,
-
-    /// Skip alpha blending (may increase performance)
-    #[arg(short = 'o', long = "opaque")]
+    /// Render every pixel as fully opaque, skipping transparency math.
+    /// Use this when your image has no meaningful alpha channel for a speed
+    /// boost. Internally uses a 32-bit RGB accumulator instead of the
+    /// default 64-bit alpha-weighted path, halving hot-loop memory traffic.
+    #[arg(short = 'o', long = "opaque", help_heading = "Display")]
     pub opaque: bool,
 
-    /// Loop playback until Ctrl+C (for animations/videos)
-    #[arg(short = 'l', long = "loop")]
+    /// Number of terminal rows to leave blank at the bottom of the screen
+    /// so the rendered image does not overlap your shell prompt or status bar.
+    #[arg(short = 'r', long = "reserve", default_value_t = 2, value_name = "ROWS",
+          help_heading = "Display")]
+    pub reserve: u64,
+
+    // ── Scaling ────────────────────────────────────────────────────────────
+
+    /// Pixel width of one terminal cell, used to preserve the correct aspect
+    /// ratio when mapping image pixels to character cells. The default of 10
+    /// matches most monospace fonts. Raise this value if the output looks
+    /// horizontally squashed; lower it if it looks stretched.
+    #[arg(long = "cell-width", default_value_t = 10, value_name = "PX",
+          help_heading = "Scaling")]
+    pub cell_width: u32,
+
+    /// Pixel height of one terminal cell, used together with --cell-width
+    /// to preserve aspect ratio. The default of 22 matches most monospace
+    /// fonts. Lower this if the output looks vertically squashed; raise it
+    /// if it looks stretched.
+    #[arg(long = "cell-height", default_value_t = 22, value_name = "PX",
+          help_heading = "Scaling")]
+    pub cell_height: u32,
+
+    // ── Playback ───────────────────────────────────────────────────────────
+
+    /// Keep playing the animation or video in an infinite loop until
+    /// Ctrl+C is pressed. After the first pass, all frames are served
+    /// directly from the in-memory ANSI cache with no re-decoding overhead.
+    #[arg(short = 'l', long = "loop", help_heading = "Playback")]
     pub loop_playback: bool,
 
-    /// Precompute all frames before displaying (trades startup time for smoother playback)
-    #[arg(short = 'p', long = "precompute")]
+    /// Decode and render every frame into memory before playback begins.
+    /// This causes a startup pause proportional to the video length, but
+    /// guarantees perfectly smooth, stutter-free playback from frame one.
+    /// Without this flag, frames are rendered on the fly during the first
+    /// pass and cached for all subsequent loops.
+    #[arg(short = 'p', long = "precompute", help_heading = "Playback")]
     pub precompute: bool,
+
+    /// Cap playback speed to at most N frames per second. Set to 0 (default)
+    /// to follow the source frame rate exactly. Handy on slow machines to cut
+    /// CPU usage, or to inspect high-fps content frame by frame. Technically,
+    /// this floors the per-frame sleep duration to 1000 / N milliseconds.
+    #[arg(long = "fps-limit", default_value_t = 0, value_name = "FPS",
+          help_heading = "Playback")]
+    pub fps_limit: u64,
+
+    // ── Performance ────────────────────────────────────────────────────────
+
+    /// How many video frames the background ffmpeg decoder thread buffers
+    /// ahead of the display thread. A larger buffer absorbs decode slowdowns
+    /// and makes playback smoother; a smaller buffer lowers peak RAM and
+    /// reduces the startup delay before the first frame appears.
+    /// Has no effect on GIFs or static images.
+    #[arg(long = "prefetch", default_value_t = 8, value_name = "FRAMES",
+          help_heading = "Performance")]
+    pub prefetch: usize,
+
+    /// Turn off the in-memory ANSI frame cache. Every frame is decoded and
+    /// rendered from scratch on each pass instead of being stored.
+    /// Recommended for very long or high-resolution videos where the cached
+    /// strings would consume too much RAM. CPU usage on loops will be higher.
+    #[arg(long = "no-cache", help_heading = "Performance")]
+    pub no_cache: bool,
+
+    // ── Diagnostics ────────────────────────────────────────────────────────
+
+    /// Print detailed runtime information to stderr while running.
+    /// Reports image and terminal dimensions, effective output cell count,
+    /// per-frame render times, live FPS vs. target FPS, cache hit/miss
+    /// counts, and a final playback summary. Useful for diagnosing
+    /// performance issues or verifying scaling behaviour.
+    #[arg(short = 'v', long = "verbose", help_heading = "Diagnostics")]
+    pub verbose: bool,
 }
 
 const DEFAULT: (u8, u8, u8) = (0x15, 0x16, 0x1c);

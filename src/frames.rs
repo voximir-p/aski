@@ -35,13 +35,16 @@ pub fn detect_media_type(path: &Path) -> MediaType {
 /// Opens a lazy frame stream for the given media file.
 /// Frames are decoded one at a time; no raw pixel data is held in memory
 /// beyond the single frame currently being processed.
+/// `prefetch` controls the number of video frames buffered ahead by the
+/// background decode thread; it has no effect on GIFs or static images.
 pub fn open_stream(
     path: &Path,
     media_type: &MediaType,
+    prefetch: usize,
 ) -> Result<Box<dyn Iterator<Item = Result<Frame, String>>>, String> {
     match media_type {
         MediaType::Gif => open_gif_stream(path),
-        MediaType::Video => open_video_stream(path),
+        MediaType::Video => open_video_stream(path, prefetch),
         MediaType::Static => unreachable!(),
     }
 }
@@ -84,8 +87,6 @@ struct VideoFrameStream {
     worker: Option<JoinHandle<()>>,
 }
 
-const VIDEO_PREFETCH_FRAMES: usize = 8;
-
 impl Iterator for VideoFrameStream {
     type Item = Result<Frame, String>;
 
@@ -107,6 +108,7 @@ impl Drop for VideoFrameStream {
 
 fn open_video_stream(
     path: &Path,
+    prefetch: usize,
 ) -> Result<Box<dyn Iterator<Item = Result<Frame, String>>>, String> {
     // Probe dimensions and frame rate before opening the decode pipe.
     let probe = Command::new("ffprobe")
@@ -172,7 +174,7 @@ fn open_video_stream(
         .take()
         .ok_or_else(|| "Failed to capture ffmpeg stdout".to_string())?;
 
-    let (tx, rx) = sync_channel::<Result<Frame, String>>(VIDEO_PREFETCH_FRAMES);
+    let (tx, rx) = sync_channel::<Result<Frame, String>>(prefetch.max(1));
     let (stop_tx, stop_rx) = sync_channel::<()>(1);
 
     let worker = std::thread::spawn(move || {
