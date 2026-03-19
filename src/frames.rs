@@ -101,7 +101,9 @@ impl Drop for VideoFrameStream {
             let _ = stop_tx.send(());
         }
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            std::thread::spawn(move || {
+                let _ = worker.join();
+            });
         }
     }
 }
@@ -161,9 +163,11 @@ fn open_video_stream(
 
     // Spawn ffmpeg and stream raw RGBA frames through the pipe.
     let mut child = Command::new("ffmpeg")
+        .arg("-nostdin")
         .arg("-i")
         .arg(path)
         .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-v", "quiet", "pipe:1"])
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()

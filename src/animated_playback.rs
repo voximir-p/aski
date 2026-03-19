@@ -12,6 +12,14 @@ use crate::{
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
+struct TerminalSessionGuard;
+
+impl Drop for TerminalSessionGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stdout(), terminal::LeaveAlternateScreen, cursor::Show);
+    }
+}
+
 pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::MediaType) {
     let path = &args.image;
 
@@ -21,6 +29,7 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
     let mut stdout = io::BufWriter::new(io::stdout());
 
     execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide).ok();
+    let _terminal_guard = TerminalSessionGuard;
 
     let mut cache: Vec<(String, u64, u64, u64)> = Vec::new();
     let mut last_status_row: Option<u64> = None;
@@ -55,10 +64,13 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
             }
             cache.clear();
 
-            let stream = frames::open_stream(path, &media_type, args.prefetch).unwrap_or_else(|e| {
-                eprintln!("{}", e);
-                std::process::exit(1);
-            });
+            let stream = match frames::open_stream(path, &media_type, args.prefetch) {
+                Ok(stream) => stream,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    break 'outer;
+                }
+            };
 
             if args.verbose {
                 if args.precompute {
@@ -282,6 +294,4 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
             }
         );
     }
-
-    execute!(stdout, terminal::LeaveAlternateScreen, cursor::Show).ok();
 }
