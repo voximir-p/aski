@@ -1,6 +1,22 @@
 # aski
 
-Render any image as true-color ANSI block art — directly in your terminal.
+> True-color terminal renderer for images, GIFs, and videos.
+
+[![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)](https://www.rust-lang.org/) [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE) [![ffmpeg](https://img.shields.io/badge/video-ffmpeg-black)](https://ffmpeg.org/)
+
+aski turns regular media into ANSI block output using full-color escape codes, with aspect-ratio correction, transparency support, streaming video decode, and smooth cached playback inside the terminal.
+
+## Overview
+
+- Render static **images** directly in the terminal
+- Play animated **GIFs** natively
+- Play **videos** through ffmpeg with buffered streaming decode
+- Preserve aspect ratio using terminal cell geometry
+- Blend transparency against any CSS-like background color
+- Cache rendered ANSI frames for smoother repeat playback
+- Rebuild automatically when the terminal is resized
+
+## Quick Start
 
 ```sh
 aski image.png
@@ -12,151 +28,155 @@ aski video.mp4 --prefetch 16 --fps-limit 30
 aski clip.mp4 --no-cache --cell-width 9 --cell-height 20
 ```
 
----
+## Why aski
 
-## How it works
+Most terminal image tools either sacrifice color fidelity, distort the source, or assume static content only. aski is built around a more practical pipeline:
 
-Each terminal cell becomes one pixel of output, drawn with the Unicode full-block character `█` colored with a 24-bit ANSI escape code. Since terminal cells are taller than they are wide (~10 wide × 22 tall in most fonts), aski corrects for that aspect ratio automatically so the image doesn't look squashed or stretched.
+- 24-bit ANSI color output using `█`
+- area-weighted downsampling instead of nearest-neighbor shortcuts
+- correct handling of non-square terminal cells
+- on-demand frame decode for animated media
+- ANSI-string caching instead of retaining raw decoded frames in memory
 
-To map many image pixels onto fewer terminal cells, aski averages the colors of all source pixels that fall into each cell. This means even small outputs look smooth rather than blocky — it's a proper area-weighted downsample, not just nearest-neighbor.
+## Feature Highlights
 
-For videos and GIFs, frames are decoded as a stream (on-demand) and rendered one-by-one. Cached data is stored as rendered ANSI strings (not raw RGBA frame buffers), reducing long-loop memory pressure.
+| Feature | What it does |
+| --- | --- |
+| Aspect-ratio aware scaling | Fits media to the terminal using configurable cell dimensions (`--cell-width`, `--cell-height`) |
+| Real transparency | Blends alpha against a configurable background instead of discarding it |
+| Fast opaque path | `--opaque` skips alpha math for images without meaningful transparency |
+| Streaming video decode | Uses ffmpeg in a background worker with bounded prefetch buffering |
+| ANSI frame cache | Reuses rendered terminal frames on repeat playback instead of re-rendering every loop |
+| Resize recovery | Detects terminal size changes frame-by-frame and rebuilds output for the new size |
+| Alternate-screen playback | Keeps animation redraw isolated and restores the original terminal contents on exit |
+| Runtime analytics | `--verbose` reports dimensions, render timing, FPS, cache behavior, and playback summary |
 
----
+## Playback Model
 
-## Features
+aski can play animated GIFs natively and most common video formats through ffmpeg.
 
-### True aspect-ratio scaling
-
-aski measures the actual terminal size, computes the correct output dimensions accounting for the 10:22 cell aspect ratio, and fits the image to fill as much of the terminal as possible without distorting it — width-first if it fits, height-constrained otherwise.
-
-### Real transparency
-
-For images with alpha (PNGs, WEBPs, etc.), each pixel's opacity is used to smoothly blend the image color toward the background color. A pixel that is 50% transparent will appear as a 50/50 mix. Fully transparent areas show the background color cleanly. The background can be any color you like (see below).
-
-### `--opaque` flag for maximum performance
-
-If you know your image has no meaningful transparency, pass `-o` / `--opaque` to skip all alpha math entirely. This path uses 32-bit accumulators instead of 64-bit, halves the memory bandwidth of the hot loop, and is compiled fully independently so the optimizer can go as far as possible.
-
-### Streaming video decode + buffered prefetch
-
-Video playback uses ffmpeg in a background decode thread and streams raw frames through a bounded prefetch queue (`--prefetch`). This keeps playback smoother under transient decode stalls while avoiding full upfront frame decode into RAM.
-
-### Rich color input for `--background`
-
-Set your background color in any format you'd use in CSS:
-
-| Format                | Example                         |
-|-----------------------|---------------------------------|
-| Hex 6-digit           | `#15161c`, `0xff00ff`, `ae6742` |
-| Hex 3-digit shorthand | `#abc` (same as `#aabbcc`)      |
-| `rgb()`               | `rgb(21, 22, 28)`               |
-| `hsl()`               | `hsl(235, 14%, 10%)`            |
-| `hwb()`               | `hwb(235 8% 86%)`               |
-| `lab()`               | `lab(8 1 -3)`                   |
-| `lch()`               | `lch(8 3 290)`                  |
-| `oklab()`             | `oklab(0.11 0.002 -0.015)`      |
-| `oklch()`             | `oklch(0.11 0.015 270)`         |
-
-The default background is `#15161c`.
-
-### Line reservation
-
-By default, aski reserves 2 lines at the bottom of the terminal so the image doesn't push your shell prompt off screen. Adjust with `-r` / `--reserve`.
-
-### Verbose mode
-
-Pass `-v` / `--verbose` to print debug info to stderr: image dimensions, terminal size, effective output size, and total cell count.
-
-### Video & animated image playback
-
-aski can play animated GIFs natively and any video format via ffmpeg (MP4, MKV, AVI, MOV, WebM, etc.).
-
-- **Realtime mode** (default): each frame is decoded, rendered, and displayed on the fly. After the first complete pass, rendered ANSI frames are cached in memory (unless `--no-cache` is set), so subsequent loops avoid re-rendering.
-- **`--precompute` mode** (`-p`): all frames are rendered to ANSI strings before playback begins. This trades startup time for smooth playback from the first shown frame.
-- **`--loop` mode** (`-l`): plays the animation/video in an infinite loop until you press Ctrl+C. Without `--loop`, playback runs once and exits.
-- **Terminal resize adaptation**: aski checks terminal size on every frame. On resize, it clears the screen, invalidates stale cache data, and rebuilds at the new dimensions automatically.
-- **Alternate-screen playback**: animated playback runs in an alternate terminal screen buffer, keeping redraw stable and restoring your original terminal contents on exit.
-
----
+| Mode | Behavior |
+| --- | --- |
+| Default | Decode, render, and display frames on demand. Reuse cached ANSI frames on later loops unless `--no-cache` is set |
+| `--precompute` | Render all frames before playback starts for smoother first-frame playback |
+| `--loop` | Replay until interrupted with `Ctrl+C` |
+| `--fps-limit` | Cap playback speed below the source frame rate |
+| `--prefetch` | Buffer more decoded video frames ahead of display to absorb decode hiccups |
+| `--no-cache` | Disable ANSI frame caching when memory matters more than repeated-loop efficiency |
 
 ## Installation
+
+### From source
 
 ```sh
 cargo install --path .
 ```
 
-Or build manually:
+### Manual build
 
 ```sh
 cargo build --release
 ./target/release/aski image.png
 ```
 
----
-
 ## Usage
 
 ```text
 Usage: aski [OPTIONS] <IMAGE>
-
-Arguments:
-  <IMAGE>  Path to the image, GIF, or video file to render in the terminal
-
-Options:
-  -h, --help                     Print help
-  -V, --version                  Print version
-
-Display:
-  -b, --background <BACKGROUND>  Background color for transparent areas [default: #15161c]
-  -o, --opaque                   Skip alpha blending math (faster for opaque sources)
-  -r, --reserve <ROWS>           Rows to reserve at terminal bottom [default: 2]
-
-Scaling:
-      --cell-width <PX>          Terminal cell width hint for aspect correction [default: 10]
-      --cell-height <PX>         Terminal cell height hint for aspect correction [default: 22]
-
-Playback:
-  -l, --loop                     Loop playback until Ctrl+C
-  -p, --precompute               Render all frames before playback starts
-      --fps-limit <FPS>          Cap playback FPS (0 = source FPS) [default: 0]
-
-Performance:
-      --prefetch <FRAMES>        Buffered video frames for ffmpeg decode thread [default: 8]
-      --no-cache                 Disable ANSI frame cache
-
-Diagnostics:
-  -v, --verbose                  Print runtime stats and playback diagnostics
 ```
 
----
+### Arguments
 
-## Supported formats
+| Argument | Description |
+| --- | --- |
+| `<IMAGE>` | Path to the image, GIF, or video file to render |
 
-**Static images**: anything the [`image`](https://crates.io/crates/image) crate supports — PNG, JPEG, WEBP, BMP, TIFF, TGA, and more.
+### Display options
 
-**Animated images**: GIF (native, no external dependencies).
+| Option | Description |
+| --- | --- |
+| `-b, --background <BACKGROUND>` | Background color for transparent areas. Default: `#15161c` |
+| `-o, --opaque` | Skip alpha blending math for faster rendering on opaque sources |
+| `-r, --reserve <ROWS>` | Reserve rows at the bottom of the terminal. Default: `2` |
 
-**Video**: MP4, MKV, AVI, MOV, WebM, FLV, WMV, M4V, TS, OGV — requires [ffmpeg](https://ffmpeg.org/) installed and on your PATH.
+### Scaling options
 
----
+| Option | Description |
+| --- | --- |
+| `--cell-width <PX>` | Terminal cell width hint for aspect correction. Default: `10` |
+| `--cell-height <PX>` | Terminal cell height hint for aspect correction. Default: `22` |
 
-## Performance notes
+### Playback options
 
-- Use `--opaque` for sources without meaningful transparency.
-- Use `--prefetch` to smooth decode bursts on slower systems.
-- Use `--fps-limit` to reduce CPU usage for very high-FPS inputs.
-- Use `--no-cache` for very long/high-resolution videos when memory matters more than loop-time CPU.
-- If output appears stretched, tune `--cell-width` and `--cell-height` to match your terminal font.
+| Option | Description |
+| --- | --- |
+| `-l, --loop` | Loop playback until interrupted |
+| `-p, --precompute` | Render all frames before playback starts |
+| `--fps-limit <FPS>` | Cap playback FPS. `0` means use the source frame rate |
 
----
+### Performance options
+
+| Option | Description |
+| --- | --- |
+| `--prefetch <FRAMES>` | Number of prefetched video frames. Default: `8` |
+| `--no-cache` | Disable ANSI frame caching |
+
+### Diagnostics
+
+| Option | Description |
+| --- | --- |
+| `-v, --verbose` | Print runtime diagnostics and playback analytics |
+
+## Background Color Formats
+
+The `--background` option accepts a wide range of CSS-like formats.
+
+| Format | Example |
+| --- | --- |
+| Hex 6-digit | `#15161c`, `0xff00ff`, `ae6742` |
+| Hex 3-digit shorthand | `#abc` |
+| `rgb()` | `rgb(21, 22, 28)` |
+| `hsl()` | `hsl(235, 14%, 10%)` |
+| `hwb()` | `hwb(235 8% 86%)` |
+| `lab()` | `lab(8 1 -3)` |
+| `lch()` | `lch(8 3 290)` |
+| `oklab()` | `oklab(0.11 0.002 -0.015)` |
+| `oklch()` | `oklch(0.11 0.015 270)` |
+
+## How It Works
+
+Each terminal cell becomes one output pixel, drawn using the Unicode full block character `█` and a 24-bit ANSI foreground color.
+
+For static images, aski downsamples the source into terminal cells using area-weighted averaging, which produces smoother results than simple nearest-neighbor sampling.
+
+For animated media, frames are decoded as a stream and rendered one by one. When caching is enabled, stored data is the rendered ANSI output rather than the raw RGBA frame buffer, which keeps repeated playback efficient without holding full decoded frame history in memory.
+
+## Supported Formats
+
+| Type | Support |
+| --- | --- |
+| Static images | Anything supported by the [`image`](https://crates.io/crates/image) crate: PNG, JPEG, WEBP, BMP, TIFF, TGA, and more |
+| Animated images | GIF |
+| Video | MP4, MKV, AVI, MOV, WebM, FLV, WMV, M4V, TS, OGV via [ffmpeg](https://ffmpeg.org/) |
+
+## Performance Tuning
+
+- Use `--opaque` when transparency is irrelevant
+- Increase `--prefetch` if video playback stalls during decode bursts
+- Use `--fps-limit` to lower CPU usage on high-FPS sources
+- Use `--no-cache` for very long or high-resolution videos if memory is the priority
+- Adjust `--cell-width` and `--cell-height` if your terminal font looks stretched or squashed
+
+## Notes
+
+- Animated playback uses the terminal alternate screen buffer
+- Resize events invalidate stale frame cache entries and trigger a rebuild
+- Verbose analytics are shown inside the playback screen instead of below your shell prompt
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes and improvements.
-
----
+Release history is tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-aski is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html#license-text) ([LICENSE](LICENSE))
+aski is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html#license-text). See [LICENSE](LICENSE).
