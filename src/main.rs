@@ -122,7 +122,6 @@ fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::Media
         }
 
         loop_count += 1;
-        let loop_start = Instant::now();
         let (cw, ch) = console_wh();
         let rch = ch.saturating_sub(args.reserve).max(1);
 
@@ -138,6 +137,9 @@ fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::Media
         let mut cached_frames: u64 = 0;
         let mut dropped_frames: u64 = 0;
         let mut frames_shown: u64 = 0;
+        // Clocked from the moment the very first frame is written to the terminal,
+        // not from the start of the outer loop (which includes decode/precompute time).
+        let mut display_start: Option<Instant> = None;
 
         if cache_stale {
             if !cache.is_empty() {
@@ -221,7 +223,10 @@ fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::Media
                     buf.extend_from_slice(ansi.as_bytes());
 
                     if args.verbose {
-                        let elapsed_s = loop_start.elapsed().as_secs_f64();
+                        let elapsed_s = display_start
+                            .get_or_insert_with(Instant::now)
+                            .elapsed()
+                            .as_secs_f64();
                         let actual_fps = if elapsed_s > 0.0 {
                             frames_shown as f64 / elapsed_s
                         } else {
@@ -275,6 +280,9 @@ fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::Media
         // every loop after a resize-triggered rebuild.
         let should_play_from_cache = args.precompute || !cache_stale;
         if should_play_from_cache && !cache.is_empty() {
+            // Reset the display clock so FPS is measured from when frames
+            // start appearing, not from the start of the outer loop.
+            display_start = None;
             let frame_count = cache.len();
             for (i, (ansi, _, _, delay_ms)) in cache.iter().enumerate() {
                 if !RUNNING.load(Ordering::Relaxed) {
@@ -301,7 +309,10 @@ fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::Media
                 buf.extend_from_slice(ansi.as_bytes());
 
                 if args.verbose {
-                    let elapsed_s = loop_start.elapsed().as_secs_f64();
+                    let elapsed_s = display_start
+                        .get_or_insert_with(Instant::now)
+                        .elapsed()
+                        .as_secs_f64();
                     let actual_fps = if elapsed_s > 0.0 {
                         frames_shown as f64 / elapsed_s
                     } else {
