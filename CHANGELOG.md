@@ -9,4 +9,4 @@
 - Create main function to handle image loading, terminal size retrieval, and rendering logic.
 - Implement rendering functions for both opaque and alpha blending modes, outputting ANSI colored blocks.
 
-[1.0.0]: https://github.com/voximir-p/cppu/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/voximir-p/aski/compare/v1.0.0...HEAD
