@@ -2,7 +2,7 @@ mod cli;
 mod render;
 
 use std::io::{self, Write};
-use terminal_size::{terminal_size, Width, Height};
+use terminal_size::{Height, Width, terminal_size};
 
 fn console_wh() -> (u64, u64) {
     if let Some((Width(w), Height(h))) = terminal_size() {

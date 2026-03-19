@@ -1,10 +1,15 @@
-use clap::builder::styling::{AnsiColor, Color, Style};
 use clap::builder::Styles;
+use clap::builder::styling::{AnsiColor, Color, Style};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "aski", about = "Render an image as ANSI ASCII art", version)]
+#[command(
+    name = "aski",
+    about = "Render an image as ANSI ASCII art",
+    version,
+    arg_required_else_help = true
+)]
 pub struct Args {
     /// Path to the input image
     pub image: PathBuf,
@@ -13,7 +18,7 @@ pub struct Args {
     #[arg(short = 'r', long = "reserve", default_value_t = 2)]
     pub reserve: u64,
 
-    /// Background color (e.g. #15161c, #abc, 0xff00ff, rgb(255,0,128), hsl(270,50%,50%), hwb(0 0% 0%), lab(50 20 -30), lch(50 30 270), oklab(0.5 0.1 -0.1), oklch(0.5 0.15 270))
+    /// Background color (e.g. 15161c, #abc, 0xff00ff, rgb(255,0,128), hsl(270,50%,50%), etc.)
     #[arg(short = 'b', long = "background", default_value = "#15161c")]
     pub background: String,
 
@@ -29,7 +34,9 @@ pub struct Args {
 const DEFAULT: (u8, u8, u8) = (0x15, 0x16, 0x1c);
 
 fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
-    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
+    let s = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
         .or_else(|| s.strip_prefix('#'))
         .unwrap_or(s);
     match s.len() {
@@ -101,7 +108,11 @@ fn hwb_to_rgb(h: f64, w: f64, b: f64) -> (u8, u8, u8) {
         (w, b)
     };
     let (r, g, bl) = hsl_to_rgb(h, 100.0, 50.0);
-    let f = |c: u8| ((c as f64 / 255.0 * (1.0 - w - b) + w) * 255.0).round().clamp(0.0, 255.0) as u8;
+    let f = |c: u8| {
+        ((c as f64 / 255.0 * (1.0 - w - b) + w) * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
     (f(r), f(g), f(bl))
 }
 
@@ -127,9 +138,17 @@ fn lab_to_rgb(l: f64, a: f64, b: f64) -> (u8, u8, u8) {
     let fx = a / 500.0 + fy;
     let fz = fy - b / 200.0;
 
-    let xr = if fx.powi(3) > 0.008856 { fx.powi(3) } else { (116.0 * fx - 16.0) / 903.3 };
+    let xr = if fx.powi(3) > 0.008856 {
+        fx.powi(3)
+    } else {
+        (116.0 * fx - 16.0) / 903.3
+    };
     let yr = if l > 7.9996 { fy.powi(3) } else { l / 903.3 };
-    let zr = if fz.powi(3) > 0.008856 { fz.powi(3) } else { (116.0 * fz - 16.0) / 903.3 };
+    let zr = if fz.powi(3) > 0.008856 {
+        fz.powi(3)
+    } else {
+        (116.0 * fz - 16.0) / 903.3
+    };
 
     // D65 white point
     let x = xr * 0.95047;
@@ -137,9 +156,9 @@ fn lab_to_rgb(l: f64, a: f64, b: f64) -> (u8, u8, u8) {
     let z = zr * 1.08883;
 
     // XYZ -> linear sRGB
-    let rl =  3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
+    let rl = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
     let gl = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
-    let bl =  0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
+    let bl = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
 
     linear_rgb_to_srgb(rl, gl, bl)
 }
@@ -162,7 +181,7 @@ fn oklab_to_rgb(l: f64, a: f64, b: f64) -> (u8, u8, u8) {
     let s3 = s_ * s_ * s_;
 
     // LMS -> linear sRGB
-    let rl =  4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+    let rl = 4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
     let gl = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
     let bl = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
 
@@ -287,10 +306,7 @@ fn make_styles() -> Styles {
                 .bold()
                 .fg_color(Some(Color::Ansi(AnsiColor::Cyan))),
         )
-        .placeholder(
-            Style::new()
-                .fg_color(Some(Color::Ansi(AnsiColor::Cyan)))
-        )
+        .placeholder(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan))))
         .error(
             Style::new()
                 .bold()

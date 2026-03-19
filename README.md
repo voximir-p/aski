@@ -84,12 +84,13 @@ Arguments:
   <IMAGE>  Path to the input image
 
 Options:
-  -r, --reserve <N>         Lines to reserve at the bottom of the terminal [default: 2]
-  -b, --background <COLOR>  Background color [default: #15161c]
-  -v, --verbose             Print debug info to stderr
-  -o, --opaque              Skip alpha blending for better performance
-  -h, --help                Print help
-  -V, --version             Print version
+  -r, --reserve <RESERVE>        Lines to reserve at the bottom of the terminal [default: 2]
+  -b, --background <BACKGROUND>  Background color (e.g. 15161c, #abc, 0xff00ff, rgb(255,0,128), hsl(270,50%,50%), etc.) 
+                                 [default: #15161c]
+  -v, --verbose                  Verbose output
+  -o, --opaque                   Skip alpha blending (may increase performance)
+  -h, --help                     Print help
+  -V, --version                  Print version
 ```
 
 ---
