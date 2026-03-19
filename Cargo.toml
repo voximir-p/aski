@@ -2,6 +2,13 @@
 name = "aski"
 version = "1.0.0"
 edition = "2024"
+repository = "https://github.com/voximir-p/aski"
+
+[package.metadata.wix]
+upgrade-guid = "FF0806DC-77E8-40B0-B7A4-0B91859C20DF"
+path-guid = "088C4DEA-7015-4094-9D8D-754003B2CD33"
+license = false
+eula = false
 
 [dependencies]
 clap = { version = "4.6.0", features = ["derive"] }
