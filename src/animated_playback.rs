@@ -20,6 +20,19 @@ impl Drop for TerminalSessionGuard {
     }
 }
 
+fn displayed_fps(frames_shown: u64, display_start: &mut Option<Instant>) -> f64 {
+    let elapsed_s = display_start
+        .get_or_insert_with(Instant::now)
+        .elapsed()
+        .as_secs_f64();
+
+    if frames_shown <= 1 || elapsed_s <= 0.0 {
+        0.0
+    } else {
+        frames_shown.saturating_sub(1) as f64 / elapsed_s
+    }
+}
+
 pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::MediaType) {
     let path = &args.image;
 
@@ -73,17 +86,17 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
             };
 
             if args.verbose {
-                if args.precompute {
-                    let msg = format!("Precomputing frames at {}x{}...", cw, rch);
-                    let max_cols = cw.saturating_sub(1) as usize;
-                    let msg: String = msg.chars().take(max_cols).collect();
-                    let banner = format!("\x1b[1;1H\x1b[2K{}", msg);
-                    let raw = stdout.get_mut();
-                    raw.write_all(banner.as_bytes()).ok();
-                    raw.flush().ok();
+                let msg = if args.precompute {
+                    format!("Precomputing frames at {}x{}...", cw, rch)
                 } else {
-                    eprintln!("Decoding and rendering frames at {}x{}...", cw, rch);
-                }
+                    format!("Decoding and rendering frames at {}x{}...", cw, rch)
+                };
+                let max_cols = cw.saturating_sub(1) as usize;
+                let msg: String = msg.chars().take(max_cols).collect();
+                let banner = format!("\x1b[1;1H\x1b[2K{}", msg);
+                let raw = stdout.get_mut();
+                raw.write_all(banner.as_bytes()).ok();
+                raw.flush().ok();
             }
 
             let decode_start = Instant::now();
@@ -148,15 +161,7 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
                     buf.extend_from_slice(ansi.as_bytes());
 
                     if args.verbose {
-                        let elapsed_s = display_start
-                            .get_or_insert_with(Instant::now)
-                            .elapsed()
-                            .as_secs_f64();
-                        let actual_fps = if elapsed_s > 0.0 {
-                            frames_shown as f64 / elapsed_s
-                        } else {
-                            0.0
-                        };
+                        let actual_fps = displayed_fps(frames_shown, &mut display_start);
                         let target_fps =
                             if delay_ms > 0 { 1000.0 / delay_ms as f64 } else { 0.0 };
                         let status = format!(
@@ -230,15 +235,7 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
                 buf.extend_from_slice(ansi.as_bytes());
 
                 if args.verbose {
-                    let elapsed_s = display_start
-                        .get_or_insert_with(Instant::now)
-                        .elapsed()
-                        .as_secs_f64();
-                    let actual_fps = if elapsed_s > 0.0 {
-                        frames_shown as f64 / elapsed_s
-                    } else {
-                        0.0
-                    };
+                    let actual_fps = displayed_fps(frames_shown, &mut display_start);
                     let target_fps =
                         if delay_ms > 0 { 1000.0 / delay_ms as f64 } else { 0.0 };
                     let status = format!(
