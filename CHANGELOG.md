@@ -16,6 +16,8 @@
 - Improve verbose analytics to report display-time FPS (excluding precompute startup work).
 - Move animated playback to alternate screen for stable in-place redraw behavior.
 - Place verbose runtime analytics directly under the rendered video area.
+- Reworked README to highlight new features and usage patterns, and added a detailed feature table.
+- Add usage examples to README to demonstrate different features.
 
 ### Fixed
 

@@ -28,6 +28,24 @@ aski video.mp4 --prefetch 16 --fps-limit 30
 aski clip.mp4 --no-cache --cell-width 9 --cell-height 20
 ```
 
+## Examples
+
+### Transparent static image
+
+![aski transparent static image example](assets/example4.mp4)
+
+### Opaque static image
+
+![aski opaque static image example](assets/example3.mp4)
+
+### Animated GIF
+
+![aski animated mp4 example](assets/example2.mp4)
+
+### Video playback
+
+![aski video playback example](assets/example1.gif)
+
 ## Why aski
 
 Most terminal image tools either sacrifice color fidelity, distort the source, or assume static content only. aski is built around a more practical pipeline:
