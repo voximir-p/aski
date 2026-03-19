@@ -32,19 +32,23 @@ aski clip.mp4 --no-cache --cell-width 9 --cell-height 20
 
 ### Transparent static image
 
-![aski transparent static image example](assets/example4.mp4)
+![aski transparent static image example](assets/example4.gif)
+[Source](https://github.com/klpod221/klpod0s)
 
 ### Opaque static image
 
-![aski opaque static image example](assets/example3.mp4)
+![aski opaque static image example](assets/example3.gif)
+[Source](https://www.instagram.com/p/CLRnmbSFzq-/)
 
 ### Animated GIF
 
-![aski animated mp4 example](assets/example2.mp4)
+![aski animated GIF example](assets/example2.gif)
+[Source](https://tenor.com/view/tung-tungtung-tungtungtung-sahur-tungtungtungsahur-tungtungsahur-gif-6699270143817937548)
 
 ### Video playback
 
 ![aski video playback example](assets/example1.gif)
+[Source](https://blurbusters.com/hfr-120fps-video-game-recording/)
 
 ## Why aski
 
@@ -83,6 +87,10 @@ aski can play animated GIFs natively and most common video formats through ffmpe
 | `--no-cache` | Disable ANSI frame caching when memory matters more than repeated-loop efficiency |
 
 ## Installation
+
+### Pre-built binary
+
+Download the latest executable from [GitHub Releases](https://github.com/voximir-p/aski/releases).
 
 ### From source
 
