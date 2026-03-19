@@ -29,6 +29,14 @@ pub struct Args {
     /// Skip alpha blending (may increase performance)
     #[arg(short = 'o', long = "opaque")]
     pub opaque: bool,
+
+    /// Loop playback until Ctrl+C (for animations/videos)
+    #[arg(short = 'l', long = "loop")]
+    pub loop_playback: bool,
+
+    /// Precompute all frames before displaying (trades startup time for smoother playback)
+    #[arg(short = 'p', long = "precompute")]
+    pub precompute: bool,
 }
 
 const DEFAULT: (u8, u8, u8) = (0x15, 0x16, 0x1c);

@@ -6,6 +6,8 @@ Render any image as true-color ANSI block art — directly in your terminal.
 aski image.png
 aski photo.jpg -b "#1e1e2e"
 aski logo.png --opaque
+aski animation.gif --loop
+aski video.mp4 --precompute --loop
 ```
 
 ---
@@ -58,6 +60,15 @@ By default, aski reserves 2 lines at the bottom of the terminal so the image doe
 
 Pass `-v` / `--verbose` to print debug info to stderr: image dimensions, terminal size, effective output size, and total cell count.
 
+### Video & animated image playback
+
+aski can play animated GIFs natively and any video format via ffmpeg (MP4, MKV, AVI, MOV, WebM, etc.).
+
+- **Realtime mode** (default): each frame is rendered and displayed on the fly. After the first complete loop, all frames are cached in memory so subsequent loops play back instantly with no rendering overhead.
+- **`--precompute` mode** (`-p`): all frames are rendered to ANSI strings before playback begins. This trades a longer startup for guaranteed smooth playback from the very first frame.
+- **`--loop` mode** (`-l`): plays the animation/video in an infinite loop until you press Ctrl+C. Without `--loop`, playback runs once and exits.
+- **Terminal resize adaptation**: aski checks the terminal size on every frame. If you resize the terminal mid-playback, it clears the screen, invalidates the frame cache, and re-renders at the new size automatically.
+
 ---
 
 ## Installation
@@ -85,19 +96,24 @@ Arguments:
 
 Options:
   -r, --reserve <RESERVE>        Lines to reserve at the bottom of the terminal [default: 2]
-  -b, --background <BACKGROUND>  Background color (e.g. 15161c, #abc, 0xff00ff, rgb(255,0,128), hsl(270,50%,50%), etc.) 
-                                 [default: #15161c]
+  -b, --background <BACKGROUND>  Background color [default: #15161c]
   -v, --verbose                  Verbose output
   -o, --opaque                   Skip alpha blending (may increase performance)
+  -l, --loop                     Loop playback until Ctrl+C
+  -p, --precompute               Precompute all frames before displaying
   -h, --help                     Print help
   -V, --version                  Print version
 ```
 
 ---
 
-## Supported image formats
+## Supported formats
 
-Anything the [`image`](https://crates.io/crates/image) crate supports: PNG, JPEG, GIF, WEBP, BMP, TIFF, TGA, and more.
+**Static images**: anything the [`image`](https://crates.io/crates/image) crate supports — PNG, JPEG, WEBP, BMP, TIFF, TGA, and more.
+
+**Animated images**: GIF (native, no external dependencies).
+
+**Video**: MP4, MKV, AVI, MOV, WebM, FLV, WMV, M4V, TS, OGV — requires [ffmpeg](https://ffmpeg.org/) installed and on your PATH.
 
 ---
 
