@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.1] - 2026-03-20
+
+### Changed
+
+- Improve CLI help formatting and descriptions for all flags.
+
 ## [1.1.0] - 2026-03-19
 
 ### Added

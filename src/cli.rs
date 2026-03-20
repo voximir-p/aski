@@ -11,100 +11,125 @@ use std::path::PathBuf;
     arg_required_else_help = true
 )]
 pub struct Args {
-    /// Path to the image, GIF, or video file to render in the terminal
+    #[arg(
+        help = "Input media file (image, GIF, or video)",
+        long_help = "Path to the image, GIF, or video file to render in the terminal."
+    )]
     pub image: PathBuf,
 
     // ── Display ────────────────────────────────────────────────────────────
 
-    /// Color to show behind transparent areas of the image.
-    /// Accepts most CSS color formats: #15161c, #abc, rgb(21,22,28),
-    /// hsl(235,14%,10%), hwb(), lab(), lch(), oklab(), oklch().
-    /// This only visibly affects images with transparency (PNG, WebP, GIF).
-    #[arg(short = 'b', long = "background", default_value = "#15161c",
-          help_heading = "Display")]
+    #[arg(
+        short = 'b',
+        long = "background",
+        default_value = "#15161c",
+        help_heading = "Display",
+        help = "Background color for transparent areas",
+        long_help = "Color to show behind transparent areas of the image.\nAccepts most CSS color formats: #15161c, #abc, rgb(21,22,28),\nhsl(235,14%,10%), hwb(), lab(), lch(), oklab(), oklch().\nThis only visibly affects images with transparency (PNG, WebP, GIF)."
+    )]
     pub background: String,
 
-    /// Render every pixel as fully opaque, skipping transparency math.
-    /// Use this when your image has no meaningful alpha channel for a speed
-    /// boost. Internally uses a 32-bit RGB accumulator instead of the
-    /// default 64-bit alpha-weighted path, halving hot-loop memory traffic.
-    #[arg(short = 'o', long = "opaque", help_heading = "Display")]
+    #[arg(
+        short = 'o',
+        long = "opaque",
+        help_heading = "Display",
+        help = "Treat pixels as fully opaque (faster)",
+        long_help = "Render every pixel as fully opaque, skipping transparency math.\nUse this when your image has no meaningful alpha channel for a speed\nboost. Internally uses a 32-bit RGB accumulator instead of the\ndefault 64-bit alpha-weighted path, halving hot-loop memory traffic."
+    )]
     pub opaque: bool,
 
-    /// Number of terminal rows to leave blank at the bottom of the screen
-    /// so the rendered image does not overlap your shell prompt or status bar.
-    #[arg(short = 'r', long = "reserve", default_value_t = 2, value_name = "ROWS",
-          help_heading = "Display")]
+    #[arg(
+        short = 'r',
+        long = "reserve",
+        default_value_t = 2,
+        value_name = "ROWS",
+        help_heading = "Display",
+        help = "Reserve rows at terminal bottom",
+        long_help = "Number of terminal rows to leave blank at the bottom of the screen\nso the rendered image does not overlap your shell prompt or status bar."
+    )]
     pub reserve: u64,
 
     // ── Scaling ────────────────────────────────────────────────────────────
 
-    /// Pixel width of one terminal cell, used to preserve the correct aspect
-    /// ratio when mapping image pixels to character cells. The default of 10
-    /// matches most monospace fonts. Raise this value if the output looks
-    /// horizontally squashed; lower it if it looks stretched.
-    #[arg(long = "cell-width", default_value_t = 10, value_name = "PX",
-          help_heading = "Scaling")]
+    #[arg(
+        long = "cell-width",
+        default_value_t = 10,
+        value_name = "PX",
+        help_heading = "Scaling",
+        help = "Terminal cell width hint in pixels",
+        long_help = "Pixel width of one terminal cell, used to preserve the correct aspect\nratio when mapping image pixels to character cells. The default of 10\nmatches most monospace fonts. Raise this value if the output looks\nhorizontally squashed; lower it if it looks stretched."
+    )]
     pub cell_width: u32,
 
-    /// Pixel height of one terminal cell, used together with --cell-width
-    /// to preserve aspect ratio. The default of 22 matches most monospace
-    /// fonts. Lower this if the output looks vertically squashed; raise it
-    /// if it looks stretched.
-    #[arg(long = "cell-height", default_value_t = 22, value_name = "PX",
-          help_heading = "Scaling")]
+    #[arg(
+        long = "cell-height",
+        default_value_t = 22,
+        value_name = "PX",
+        help_heading = "Scaling",
+        help = "Terminal cell height hint in pixels",
+        long_help = "Pixel height of one terminal cell, used together with --cell-width\nto preserve aspect ratio. The default of 22 matches most monospace\nfonts. Lower this if the output looks vertically squashed; raise it\nif it looks stretched."
+    )]
     pub cell_height: u32,
 
     // ── Playback ───────────────────────────────────────────────────────────
 
-    /// Keep playing the animation or video in an infinite loop until
-    /// Ctrl+C is pressed. After the first pass, all frames are served
-    /// directly from the in-memory ANSI cache with no re-decoding overhead.
-    #[arg(short = 'l', long = "loop", help_heading = "Playback")]
+    #[arg(
+        short = 'l',
+        long = "loop",
+        help_heading = "Playback",
+        help = "Loop playback until interrupted",
+        long_help = "Keep playing the animation or video in an infinite loop until\nCtrl+C is pressed. After the first pass, all frames are served\ndirectly from the in-memory ANSI cache with no re-decoding overhead."
+    )]
     pub loop_playback: bool,
 
-    /// Decode and render every frame into memory before playback begins.
-    /// This causes a startup pause proportional to the video length, but
-    /// guarantees perfectly smooth, stutter-free playback from frame one.
-    /// Without this flag, frames are rendered on the fly during the first
-    /// pass and cached for all subsequent loops.
-    #[arg(short = 'p', long = "precompute", help_heading = "Playback")]
+    #[arg(
+        short = 'p',
+        long = "precompute",
+        help_heading = "Playback",
+        help = "Render all frames before playback",
+        long_help = "Decode and render every frame into memory before playback begins.\nThis causes a startup pause proportional to the video length, but\nguarantees perfectly smooth, stutter-free playback from frame one.\nWithout this flag, frames are rendered on the fly during the first\npass and cached for all subsequent loops."
+    )]
     pub precompute: bool,
 
-    /// Cap playback speed to at most N frames per second. Set to 0 (default)
-    /// to follow the source frame rate exactly. Handy on slow machines to cut
-    /// CPU usage, or to inspect high-fps content frame by frame. Technically,
-    /// this floors the per-frame sleep duration to 1000 / N milliseconds.
-    #[arg(long = "fps-limit", default_value_t = 0, value_name = "FPS",
-          help_heading = "Playback")]
+    #[arg(
+        long = "fps-limit",
+        default_value_t = 0,
+        value_name = "FPS",
+        help_heading = "Playback",
+        help = "Cap playback FPS (0 = source FPS)",
+        long_help = "Cap playback speed to at most N frames per second. Set to 0 (default)\nto follow the source frame rate exactly. Handy on slow machines to cut\nCPU usage, or to inspect high-fps content frame by frame. Technically,\nthis floors the per-frame sleep duration to 1000 / N milliseconds."
+    )]
     pub fps_limit: u64,
 
     // ── Performance ────────────────────────────────────────────────────────
 
-    /// How many video frames the background ffmpeg decoder thread buffers
-    /// ahead of the display thread. A larger buffer absorbs decode slowdowns
-    /// and makes playback smoother; a smaller buffer lowers peak RAM and
-    /// reduces the startup delay before the first frame appears.
-    /// Has no effect on GIFs or static images.
-    #[arg(long = "prefetch", default_value_t = 8, value_name = "FRAMES",
-          help_heading = "Performance")]
+    #[arg(
+        long = "prefetch",
+        default_value_t = 8,
+        value_name = "FRAMES",
+        help_heading = "Performance",
+        help = "Decoder prefetch buffer size",
+        long_help = "How many video frames the background ffmpeg decoder thread buffers\nahead of the display thread. A larger buffer absorbs decode slowdowns\nand makes playback smoother; a smaller buffer lowers peak RAM and\nreduces the startup delay before the first frame appears.\nHas no effect on GIFs or static images."
+    )]
     pub prefetch: usize,
 
-    /// Turn off the in-memory ANSI frame cache. Every frame is decoded and
-    /// rendered from scratch on each pass instead of being stored.
-    /// Recommended for very long or high-resolution videos where the cached
-    /// strings would consume too much RAM. CPU usage on loops will be higher.
-    #[arg(long = "no-cache", help_heading = "Performance")]
+    #[arg(
+        long = "no-cache",
+        help_heading = "Performance",
+        help = "Disable ANSI frame caching",
+        long_help = "Turn off the in-memory ANSI frame cache. Every frame is decoded and\nrendered from scratch on each pass instead of being stored.\nRecommended for very long or high-resolution videos where the cached\nstrings would consume too much RAM. CPU usage on loops will be higher."
+    )]
     pub no_cache: bool,
 
     // ── Diagnostics ────────────────────────────────────────────────────────
 
-    /// Print detailed runtime information to stderr while running.
-    /// Reports image and terminal dimensions, effective output cell count,
-    /// per-frame render times, live FPS vs. target FPS, cache hit/miss
-    /// counts, and a final playback summary. Useful for diagnosing
-    /// performance issues or verifying scaling behaviour.
-    #[arg(short = 'v', long = "verbose", help_heading = "Diagnostics")]
+    #[arg(
+        short = 'v',
+        long = "verbose",
+        help_heading = "Diagnostics",
+        help = "Show runtime diagnostics",
+        long_help = "Print detailed runtime information to stderr while running.\nReports image and terminal dimensions, effective output cell count,\nper-frame render times, live FPS vs. target FPS, cache hit/miss\ncounts, and a final playback summary. Useful for diagnosing\nperformance issues or verifying scaling behaviour."
+    )]
     pub verbose: bool,
 }
 
