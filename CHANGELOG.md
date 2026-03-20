@@ -47,6 +47,7 @@
 - Create main function to handle image loading, terminal size retrieval, and rendering logic.
 - Implement rendering functions for both opaque and alpha blending modes, outputting ANSI colored blocks.
 
+[1.1.1]: https://github.com/voximir-p/aski/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/voximir-p/aski/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/voximir-p/aski/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/voximir-p/aski/releases/tag/v1.0.0
