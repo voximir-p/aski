@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.2] - 2026-03-20
+
+### Fixed
+
+- Fix FPS analytics reporting incorrectly.
+
 ## [1.1.1] - 2026-03-20
 
 ### Changed
@@ -47,6 +53,7 @@
 - Create main function to handle image loading, terminal size retrieval, and rendering logic.
 - Implement rendering functions for both opaque and alpha blending modes, outputting ANSI colored blocks.
 
+[1.1.2]: https://github.com/voximir-p/aski/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/voximir-p/aski/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/voximir-p/aski/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/voximir-p/aski/compare/v1.0.0...v1.0.1
