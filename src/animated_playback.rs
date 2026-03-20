@@ -33,6 +33,36 @@ fn displayed_fps(frames_shown: u64, display_start: &mut Option<Instant>) -> f64 
     }
 }
 
+fn target_fps(delay: Duration) -> f64 {
+    if delay.is_zero() {
+        0.0
+    } else {
+        1.0 / delay.as_secs_f64()
+    }
+}
+
+fn sleep_to_next_frame(next_deadline: &mut Option<Instant>, frame_delay: Duration) -> bool {
+    if frame_delay.is_zero() {
+        return false;
+    }
+
+    let now = Instant::now();
+    let deadline = next_deadline.get_or_insert_with(|| now + frame_delay);
+
+    if now < *deadline {
+        std::thread::sleep(*deadline - now);
+        *deadline += frame_delay;
+        false
+    } else {
+        let mut missed = false;
+        while *deadline <= now {
+            *deadline += frame_delay;
+            missed = true;
+        }
+        missed
+    }
+}
+
 pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::MediaType) {
     let path = &args.image;
 
@@ -44,7 +74,7 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
     execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide).ok();
     let _terminal_guard = TerminalSessionGuard;
 
-    let mut cache: Vec<(String, u64, u64, u64)> = Vec::new();
+    let mut cache: Vec<(String, u64, u64, Duration)> = Vec::new();
     let mut last_status_row: Option<u64> = None;
 
     let mut loop_count: u64 = 0;
@@ -70,6 +100,7 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
         let mut dropped_frames: u64 = 0;
         let mut frames_shown: u64 = 0;
         let mut display_start: Option<Instant> = None;
+        let mut next_deadline: Option<Instant> = None;
 
         if cache_stale {
             if !cache.is_empty() {
@@ -122,7 +153,6 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
                     }
                 };
 
-                let frame_start = Instant::now();
                 let (out_w, out_h) = compute_output_dims(
                     frame.width,
                     frame.height,
@@ -142,14 +172,16 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
                     args.opaque,
                 );
                 let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-                let delay_ms = if args.fps_limit > 0 {
-                    frame.delay_ms.max(1000 / args.fps_limit.max(1))
+                let delay = if args.fps_limit > 0 {
+                    frame
+                        .delay
+                        .max(Duration::from_secs_f64(1.0 / args.fps_limit.max(1) as f64))
                 } else {
-                    frame.delay_ms
+                    frame.delay
                 };
 
                 if !args.no_cache {
-                    cache.push((ansi.clone(), cw, rch, delay_ms));
+                    cache.push((ansi.clone(), cw, rch, delay));
                 }
                 rendered_frames += 1;
 
@@ -162,8 +194,7 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
 
                     if args.verbose {
                         let actual_fps = displayed_fps(frames_shown, &mut display_start);
-                        let target_fps =
-                            if delay_ms > 0 { 1000.0 / delay_ms as f64 } else { 0.0 };
+                        let target_fps = target_fps(delay);
                         let status = format!(
                             "frame {} | loop {} | FPS: {:.1}/{:.1} | render: {:.1}ms | rendered: {} dropped: {}",
                             frames_shown,
@@ -185,11 +216,7 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
                     raw.write_all(&buf).ok();
                     raw.flush().ok();
 
-                    let elapsed = frame_start.elapsed();
-                    let target = Duration::from_millis(delay_ms);
-                    if elapsed < target {
-                        std::thread::sleep(target - elapsed);
-                    } else {
+                    if sleep_to_next_frame(&mut next_deadline, delay) {
                         dropped_frames += 1;
                     }
                 }
@@ -210,13 +237,12 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
         let should_play_from_cache = args.precompute || !cache_stale;
         if should_play_from_cache && !cache.is_empty() {
             display_start = None;
+            next_deadline = None;
             let frame_count = cache.len();
-            for (i, (ansi, _, _, delay_ms)) in cache.iter().enumerate() {
+            for (i, (ansi, _, _, delay)) in cache.iter().enumerate() {
                 if !RUNNING.load(Ordering::Relaxed) {
                     break 'outer;
                 }
-
-                let start = Instant::now();
 
                 let (cur_cw, cur_ch) = console_wh();
                 let cur_rch = cur_ch.saturating_sub(args.reserve).max(1);
@@ -226,7 +252,7 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
                     continue 'outer;
                 }
 
-                let delay_ms = *delay_ms;
+                let delay = *delay;
                 cached_frames += 1;
                 frames_shown += 1;
 
@@ -236,8 +262,7 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
 
                 if args.verbose {
                     let actual_fps = displayed_fps(frames_shown, &mut display_start);
-                    let target_fps =
-                        if delay_ms > 0 { 1000.0 / delay_ms as f64 } else { 0.0 };
+                    let target_fps = target_fps(delay);
                     let status = format!(
                         "frame {}/{} | loop {} | FPS: {:.1}/{:.1} | cache | cached: {} rendered: {} dropped: {}",
                         i + 1,
@@ -260,11 +285,7 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
                 raw.write_all(&buf).ok();
                 raw.flush().ok();
 
-                let elapsed = start.elapsed();
-                let target = Duration::from_millis(delay_ms);
-                if elapsed < target {
-                    std::thread::sleep(target - elapsed);
-                } else {
+                if sleep_to_next_frame(&mut next_deadline, delay) {
                     dropped_frames += 1;
                 }
             }

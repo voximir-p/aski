@@ -3,12 +3,13 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 pub struct Frame {
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
-    pub delay_ms: u64,
+    pub delay: Duration,
 }
 
 pub enum MediaType {
@@ -66,14 +67,14 @@ fn open_gif_stream(
     let iter = decoder.into_frames().map(|frame_result| {
         let frame = frame_result.map_err(|e| format!("Failed to decode frame: {}", e))?;
         let (numer, denom) = frame.delay().numer_denom_ms();
-        let delay_ms = (numer as u64) / (denom as u64).max(1);
+        let delay_ms = (numer as f64) / (denom as f64).max(1.0);
         let buffer = frame.into_buffer();
         let (w, h) = buffer.dimensions();
         Ok(Frame {
             rgba: buffer.into_raw(),
             width: w,
             height: h,
-            delay_ms: delay_ms.max(10),
+            delay: Duration::from_secs_f64((delay_ms.max(10.0)) / 1000.0),
         })
     });
 
@@ -148,17 +149,7 @@ fn open_video_stream(
         .parse()
         .map_err(|_| format!("Invalid video height: {}", parts[1]))?;
 
-    // Parse frame rate (e.g. "30/1" or "30000/1001")
-    let fps_parts: Vec<&str> = parts[2].split('/').collect();
-    let fps = if fps_parts.len() == 2 {
-        let num: f64 = fps_parts[0].parse().unwrap_or(30.0);
-        let den: f64 = fps_parts[1].parse().unwrap_or(1.0);
-        if den > 0.0 { num / den } else { 30.0 }
-    } else {
-        parts[2].parse::<f64>().unwrap_or(30.0)
-    };
-
-    let delay_ms = (1000.0 / fps).round().max(1.0) as u64;
+    let frame_delay = parse_frame_delay(parts[2]);
     let frame_size = (width as usize) * (height as usize) * 4;
 
     // Spawn ffmpeg and stream raw RGBA frames through the pipe.
@@ -212,7 +203,7 @@ fn open_video_stream(
                     rgba: buf,
                     width,
                     height,
-                    delay_ms,
+                    delay: frame_delay,
                 }))
                 .is_err()
             {
@@ -233,4 +224,23 @@ fn open_video_stream(
         stop_tx: Some(stop_tx),
         worker: Some(worker),
     }))
+}
+
+fn parse_frame_delay(rate: &str) -> Duration {
+    let default_fps = 30.0;
+
+    if let Some((num_s, den_s)) = rate.split_once('/') {
+        let num = num_s.parse::<u64>().ok();
+        let den = den_s.parse::<u64>().ok();
+        if let (Some(num), Some(den)) = (num, den) {
+            if num > 0 {
+                let nanos = ((den as u128) * 1_000_000_000u128) / (num as u128);
+                let nanos = nanos.max(1).min(u64::MAX as u128) as u64;
+                return Duration::from_nanos(nanos);
+            }
+        }
+    }
+
+    let fps = rate.parse::<f64>().ok().filter(|v| *v > 0.0).unwrap_or(default_fps);
+    Duration::from_secs_f64(1.0 / fps)
 }
