@@ -18,7 +18,6 @@ pub struct Args {
     pub image: PathBuf,
 
     // ── Display ────────────────────────────────────────────────────────────
-
     #[arg(
         short = 'b',
         long = "background",
@@ -50,7 +49,6 @@ pub struct Args {
     pub reserve: u64,
 
     // ── Scaling ────────────────────────────────────────────────────────────
-
     #[arg(
         long = "cell-width",
         default_value_t = 10,
@@ -72,7 +70,6 @@ pub struct Args {
     pub cell_height: u32,
 
     // ── Playback ───────────────────────────────────────────────────────────
-
     #[arg(
         short = 'l',
         long = "loop",
@@ -102,7 +99,6 @@ pub struct Args {
     pub fps_limit: u64,
 
     // ── Performance ────────────────────────────────────────────────────────
-
     #[arg(
         long = "prefetch",
         default_value_t = 8,
@@ -122,7 +118,6 @@ pub struct Args {
     pub no_cache: bool,
 
     // ── Diagnostics ────────────────────────────────────────────────────────
-
     #[arg(
         short = 'v',
         long = "verbose",

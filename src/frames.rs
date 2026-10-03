@@ -26,9 +26,9 @@ pub fn detect_media_type(path: &Path) -> MediaType {
         .as_deref()
     {
         Some("gif") => MediaType::Gif,
-        Some(
-            "mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" | "wmv" | "m4v" | "ts" | "ogv",
-        ) => MediaType::Video,
+        Some("mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" | "wmv" | "m4v" | "ts" | "ogv") => {
+            MediaType::Video
+        }
         _ => MediaType::Static,
     }
 }
@@ -50,19 +50,16 @@ pub fn open_stream(
     }
 }
 
-fn open_gif_stream(
-    path: &Path,
-) -> Result<Box<dyn Iterator<Item = Result<Frame, String>>>, String> {
-    use image::codecs::gif::GifDecoder;
+fn open_gif_stream(path: &Path) -> Result<Box<dyn Iterator<Item = Result<Frame, String>>>, String> {
     use image::AnimationDecoder;
+    use image::codecs::gif::GifDecoder;
     use std::fs::File;
     use std::io::BufReader;
 
-    let file = File::open(path)
-        .map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
+    let file =
+        File::open(path).map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
     let reader = BufReader::new(file);
-    let decoder =
-        GifDecoder::new(reader).map_err(|e| format!("Failed to decode GIF: {}", e))?;
+    let decoder = GifDecoder::new(reader).map_err(|e| format!("Failed to decode GIF: {}", e))?;
 
     let iter = decoder.into_frames().map(|frame_result| {
         let frame = frame_result.map_err(|e| format!("Failed to decode frame: {}", e))?;
@@ -157,7 +154,9 @@ fn open_video_stream(
         .arg("-nostdin")
         .arg("-i")
         .arg(path)
-        .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-v", "quiet", "pipe:1"])
+        .args([
+            "-f", "rawvideo", "-pix_fmt", "rgba", "-v", "quiet", "pipe:1",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -241,6 +240,10 @@ fn parse_frame_delay(rate: &str) -> Duration {
         }
     }
 
-    let fps = rate.parse::<f64>().ok().filter(|v| *v > 0.0).unwrap_or(default_fps);
+    let fps = rate
+        .parse::<f64>()
+        .ok()
+        .filter(|v| *v > 0.0)
+        .unwrap_or(default_fps);
     Duration::from_secs_f64(1.0 / fps)
 }

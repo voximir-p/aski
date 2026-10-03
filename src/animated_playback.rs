@@ -229,7 +229,11 @@ pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::M
                     "Precomputation complete: {} frames in {:.2}s ({:.1} frames/s)",
                     cache.len(),
                     secs,
-                    if secs > 0.0 { cache.len() as f64 / secs } else { 0.0 },
+                    if secs > 0.0 {
+                        cache.len() as f64 / secs
+                    } else {
+                        0.0
+                    },
                 );
             }
         }

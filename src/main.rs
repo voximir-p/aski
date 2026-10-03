@@ -1,10 +1,10 @@
+mod animated_playback;
 mod cli;
 mod frames;
-mod terminal_utils;
 mod media_render;
-mod static_playback;
-mod animated_playback;
 mod render;
+mod static_playback;
+mod terminal_utils;
 
 fn main() {
     let args = cli::parse_args();

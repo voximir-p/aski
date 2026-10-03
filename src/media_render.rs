@@ -1,4 +1,11 @@
-pub fn compute_output_dims(iw: u32, ih: u32, tw: u64, th: u64, cw_px: u32, ch_px: u32) -> (u64, u64) {
+pub fn compute_output_dims(
+    iw: u32,
+    ih: u32,
+    tw: u64,
+    th: u64,
+    cw_px: u32,
+    ch_px: u32,
+) -> (u64, u64) {
     let cw_px = cw_px.max(1) as f64;
     let ch_px = ch_px.max(1) as f64;
     let h_from_w = ((tw as f64 * ih as f64 * cw_px) / (iw as f64 * ch_px))
