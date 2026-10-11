@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [ '**' ]
   pull_request:
 
 permissions:
@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -37,7 +37,7 @@ jobs:
       - name: Test video decoding and cancellation
         if: runner.os == 'Linux'
         timeout-minutes: 2
-        run: cargo test --locked --test cli -- --include-ignored
+        run: cargo test --locked --test cli --test url -- --include-ignored
       - name: Test terminal resize and restoration
         if: runner.os == 'Linux'
         timeout-minutes: 2

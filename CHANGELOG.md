@@ -1,9 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2.0.0] - 2026-10-11
 
 ### Added
 
+- `--url` / `-u` input for direct HTTP/HTTPS images, GIFs, and videos, with redirects, content detection, download
+  progress, cancellation, and temporary-file cleanup.
 - Adaptive playback status with PLAY/CACHE modes, a Ctrl+C hint, and progress during precomputation.
 - Reusable Rust library with area-filtered rendering, color parsing, lazy frame streams, and typed errors.
 - Regression tests, a rendering benchmark, and cross-platform formatting, lint, and test CI.
@@ -82,7 +84,7 @@
 - Create main function to handle image loading, terminal size retrieval, and rendering logic.
 - Implement rendering functions for both opaque and alpha blending modes, outputting ANSI colored blocks.
 
-[Unreleased]: https://github.com/voximir-p/aski/compare/v1.1.2...HEAD
+[2.0.0]: https://github.com/voximir-p/aski/compare/v1.1.2...v2.0.0
 [1.1.2]: https://github.com/voximir-p/aski/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/voximir-p/aski/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/voximir-p/aski/compare/v1.0.1...v1.1.0

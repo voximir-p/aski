@@ -5,11 +5,13 @@
 [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)](https://www.rust-lang.org/) [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE) [![ffmpeg](https://img.shields.io/badge/video-ffmpeg-black)](https://ffmpeg.org/)
 
 aski turns regular media into ANSI block output using full-color escape codes, with aspect-ratio correction,
-transparency support, streaming video decode, and cached playback inside the terminal, plus a reusable Rust rendering library.
+transparency support, streaming video decode, and cached playback inside the terminal, plus a reusable Rust rendering
+library.
 
 ## Overview
 
 - Render static **images** directly in the terminal
+- Download direct **HTTP/HTTPS media URLs** with `--url` / `-u`
 - Play animated **GIFs** natively
 - Play **videos** through ffmpeg with buffered streaming decode
 - Preserve aspect ratio using terminal cell geometry
@@ -21,6 +23,8 @@ transparency support, streaming video decode, and cached playback inside the ter
 
 ```sh
 aski image.png
+aski --url "https://example.com/photo.jpg"
+aski -u "https://example.com/animation.gif" --loop
 aski photo.jpg -b "#1e1e2e"
 aski logo.png --opaque
 aski animation.gif --loop
@@ -63,29 +67,29 @@ aski combines a few focused rendering techniques:
 
 ## Feature Highlights
 
-| Feature                    | What it does                                                                                    |
-|----------------------------|-------------------------------------------------------------------------------------------------|
-| Aspect-ratio aware scaling | Fits media to the terminal using configurable cell dimensions (`--cell-width`, `--cell-height`) |
-| Real transparency          | Blends alpha against a configurable background instead of discarding it                         |
-| Fast opaque path           | `--opaque` skips alpha math for images without meaningful transparency                          |
-| Streaming video decode     | Uses ffmpeg in a background worker with bounded prefetch buffering                              |
-| ANSI frame cache           | Reuses rendered terminal frames on repeat playback instead of re-rendering every loop           |
-| Resize recovery            | Detects terminal size changes frame-by-frame and rebuilds output for the new size               |
-| Alternate-screen playback  | Keeps animation redraw isolated and restores the original terminal contents on exit             |
+| Feature                    | What it does                                                                                          |
+|----------------------------|-------------------------------------------------------------------------------------------------------|
+| Aspect-ratio aware scaling | Fits media to the terminal using configurable cell dimensions (`--cell-width`, `--cell-height`)       |
+| Real transparency          | Blends alpha against a configurable background instead of discarding it                               |
+| Fast opaque path           | `--opaque` skips alpha math for images without meaningful transparency                                |
+| Streaming video decode     | Uses ffmpeg in a background worker with bounded prefetch buffering                                    |
+| ANSI frame cache           | Reuses rendered terminal frames on repeat playback instead of re-rendering every loop                 |
+| Resize recovery            | Detects terminal size changes frame-by-frame and rebuilds output for the new size                     |
+| Alternate-screen playback  | Keeps animation redraw isolated and restores the original terminal contents on exit                   |
 | Runtime analytics          | `--verbose` reports dimensions, render timing, FPS, cache behavior, late frames, and playback summary |
 
 ## Playback Model
 
 aski can play animated GIFs natively and most common video formats through ffmpeg.
 
-| Mode           | Behavior                                                                                                         |
-|----------------|------------------------------------------------------------------------------------------------------------------|
+| Mode           | Behavior                                                                                                               |
+|----------------|------------------------------------------------------------------------------------------------------------------------|
 | Default        | Decode, render, and display frames on demand. Cache ANSI frames when `--loop` is requested, unless `--no-cache` is set |
-| `--precompute` | Render all frames before playback starts for smoother first-frame playback                                       |
-| `--loop`       | Replay until interrupted with `Ctrl+C`                                                                           |
-| `--fps-limit`  | Slow playback below the source frame rate without skipping frames |
-| `--prefetch`   | Buffer more decoded video frames ahead of display to absorb decode hiccups                                       |
-| `--no-cache`   | Disable ANSI frame caching when memory matters more than repeated-loop efficiency                                |
+| `--precompute` | Render all frames before playback starts for smoother first-frame playback                                             |
+| `--loop`       | Replay until interrupted with `Ctrl+C`                                                                                 |
+| `--fps-limit`  | Slow playback below the source frame rate without skipping frames                                                      |
+| `--prefetch`   | Buffer more decoded video frames ahead of display to absorb decode hiccups                                             |
+| `--no-cache`   | Disable ANSI frame caching when memory matters more than repeated-loop efficiency                                      |
 
 ## Installation
 
@@ -114,17 +118,45 @@ Usage: aski [OPTIONS] <MEDIA>
 
 ### Arguments
 
-| Argument  | Description                                     |
-|-----------|-------------------------------------------------|
-| `<MEDIA>` | Path to the image, GIF, or video file to render |
+| Argument  | Description                                                                  |
+|-----------|------------------------------------------------------------------------------|
+| `<MEDIA>` | Path to an image, GIF, or video; with `--url`, a direct HTTP/HTTPS media URL |
+
+### URL input
+
+Use `-u` or `--url` to treat `<MEDIA>` as a URL:
+
+```sh
+aski --url "https://example.com/photo.jpg"
+aski "https://example.com/animation.gif" -u --loop
+aski -u "https://example.com/download?id=42&format=mp4" --precompute
+```
+
+Supply a direct media URL, rather than a web page such as a YouTube watch page,
+a GIF sharing page, or a streaming playlist. Quote URLs to protect shell characters
+such as `&`. HTTP and HTTPS are supported, including redirects (up to 10).
+HTTPS certificates are verified.
+
+The complete file is downloaded to a temporary directory before rendering, using
+bounded download buffers instead of loading the whole response into memory. Images
+and GIFs are identified by their contents, so missing extensions, query strings, and
+misleading filenames work. Other files go through the video decoder and require
+`ffmpeg` and `ffprobe`, just like local videos.
+
+Downloads show progress on stderr in a terminal or with `--verbose`. Ctrl+C cancels
+downloading or playback. The temporary file is reused across loops and resizes,
+including with `--no-cache`, and removed on normal exit, errors, or Ctrl+C.
+A connection has 10 seconds to open; a stalled response times out after 30 seconds
+without data. There is no total download duration limit. Without `--url`, `<MEDIA>`
+continues to be treated as a local path.
 
 ### Display options
 
-| Option                          | Description                                                     |
-|---------------------------------|-----------------------------------------------------------------|
-| `-b, --background <COLOR>` | Background color for transparent areas. Default: `#15161c`      |
-| `-o, --opaque`                  | Skip alpha blending math for faster rendering on opaque sources |
-| `-r, --reserve <ROWS>` | Keep rows below the image; animation uses one for status. Default: `2` |
+| Option                     | Description                                                            |
+|----------------------------|------------------------------------------------------------------------|
+| `-b, --background <COLOR>` | Background color for transparent areas. Default: `#1a1515`             |
+| `-o, --opaque`             | Skip alpha blending math for faster rendering on opaque sources        |
+| `-r, --reserve <ROWS>`     | Keep rows below the image; animation uses one for status. Default: `2` |
 
 ### Scaling options
 
@@ -143,10 +175,10 @@ Usage: aski [OPTIONS] <MEDIA>
 
 ### Performance options
 
-| Option                | Description                                     |
-|-----------------------|-------------------------------------------------|
+| Option                | Description                                                         |
+|-----------------------|---------------------------------------------------------------------|
 | `--prefetch <FRAMES>` | Queued video frames, `0`–`1024`. Default: `8`; `0` means unbuffered |
-| `--no-cache`          | Disable ANSI frame caching                      |
+| `--no-cache`          | Disable ANSI frame caching                                          |
 
 ### Diagnostics
 
@@ -205,12 +237,14 @@ Invalid input is rejected rather than silently replaced with the default.
 Each terminal cell becomes one output pixel, drawn using the Unicode full block character `█` and a 24-bit ANSI
 foreground color.
 
-For each image or animation frame, aski downsamples the source into terminal cells using area-weighted averaging, which produces
+For each image or animation frame, aski downsamples the source into terminal cells using area-weighted averaging, which
+produces
 smoother results than simple nearest-neighbor sampling. Fractional pixel coverage is preserved along both axes,
 and images smaller than the terminal are enlarged without leaving empty cells. Channels are averaged in sRGB space.
 The renderer reuses sampling geometry and row buffers and emits a color escape only when the color changes.
 
-For animated media, frames are decoded as a stream and rendered one by one. For looping or precomputed playback, cached data is the
+For animated media, frames are decoded as a stream and rendered one by one. For looping or precomputed playback, cached
+data is the
 rendered ANSI output rather than the raw RGBA frame buffer, which keeps repeated playback efficient without holding full
 decoded frame history in memory.
 
@@ -246,14 +280,14 @@ decoded frame history in memory.
 
 ## Troubleshooting
 
-| Symptom | What to check |
-|---------|---------------|
-| `Failed to start ffprobe` or `ffmpeg` | Install ffmpeg and make both executables available on `PATH`. Static images and GIFs do not need them. |
-| Escape codes appear as text or colors look wrong | Use a terminal that supports ANSI escape sequences and 24-bit color. Output redirected to a file still contains ANSI codes. |
-| Image looks stretched | Adjust the cell dimensions to match your font. Lower `--cell-width` for horizontally squashed output; raise it for stretched output. |
-| High memory use when looping | Use `--no-cache` and reduce `--prefetch`. Precomputing stores every rendered frame. |
-| Status line has fewer details | Widen the terminal. Compact layouts prioritize frame count, FPS, and the stop hint. |
-| Video plays more slowly with `--fps-limit` | This option extends frame durations. Use `0` to follow source timing. |
+| Symptom                                          | What to check                                                                                                                        |
+|--------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| `Failed to start ffprobe` or `ffmpeg`            | Install ffmpeg and make both executables available on `PATH`. Static images and GIFs do not need them.                               |
+| Escape codes appear as text or colors look wrong | Use a terminal that supports ANSI escape sequences and 24-bit color. Output redirected to a file still contains ANSI codes.          |
+| Image looks stretched                            | Adjust the cell dimensions to match your font. Lower `--cell-width` for horizontally squashed output; raise it for stretched output. |
+| High memory use when looping                     | Use `--no-cache` and reduce `--prefetch`. Precomputing stores every rendered frame.                                                  |
+| Status line has fewer details                    | Widen the terminal. Compact layouts prioritize frame count, FPS, and the stop hint.                                                  |
+| Video plays more slowly with `--fps-limit`       | This option extends frame durations. Use `0` to follow source timing.                                                                |
 
 ## Rust Library
 
@@ -290,7 +324,7 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 # Requires ffmpeg and ffprobe:
-cargo test --locked --test cli -- --include-ignored
+cargo test --locked --test cli --test url -- --include-ignored
 cargo bench --bench render
 # Unix terminal resize, Ctrl+C, and restoration checks (requires ffmpeg):
 cargo build --locked
@@ -298,7 +332,8 @@ python3 tests/terminal_smoke.py target/debug/aski
 ```
 
 Tests cover sampling against an independent two-dimensional reference, transparency, upscaling,
-color parsing, variable frame timing, CLI failures, GIF playback, and video decoder cleanup.
+color parsing, variable frame timing, CLI failures, GIF playback, video decoder cleanup,
+and URL downloads against a local HTTP server (redirects, content detection, errors, and cancellation).
 The benchmark measures reused rendering buffers at 360p, 1080p, and 4K; it excludes decoding and terminal I/O.
 
 ## Changelog

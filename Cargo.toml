@@ -1,6 +1,6 @@
 [package]
 name = "aski"
-version = "1.2.0"
+version = "2.0.0"
 edition = "2024"
 repository = "https://github.com/voximir-p/aski"
 
@@ -15,7 +15,10 @@ clap = { version = "4.6.7", features = ["derive"] }
 crossterm = "0.29.0"
 ctrlc = "3.5.2"
 image = "0.25.10"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
+tempfile = "3.27.0"
 terminal_size = "0.4.4"
+tokio = { version = "1.53.2", features = ["rt", "time", "macros"] }
 
 # The profile that 'dist' will build with
 [profile.dist]

@@ -192,10 +192,11 @@ fn present(
     output.flush()
 }
 
-pub fn render_animated(args: &cli::Args, media_type: MediaType) -> io::Result<()> {
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let signal = Arc::clone(&cancelled);
-    ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed)).map_err(io::Error::other)?;
+pub fn render_animated(
+    args: &cli::Args,
+    media_type: MediaType,
+    cancelled: Arc<AtomicBool>,
+) -> io::Result<()> {
     let session = TerminalSession::enter()?;
     let mut stdout = io::BufWriter::new(io::stdout().lock());
     let mut cache: Vec<RenderedFrame> = Vec::new();

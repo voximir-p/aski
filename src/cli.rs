@@ -13,16 +13,25 @@ use std::path::PathBuf;
     styles = make_styles(),
     max_term_width = 100,
     arg_required_else_help = true,
-    after_help = "Examples:\n  aski photo.jpg\n  aski logo.png -b '#1e1e2e'\n  aski animation.gif --loop\n  aski video.mp4 --precompute --loop\n\nUse --help for details. Press Ctrl+C to stop playback.",
-    after_long_help = "Examples:\n  aski photo.jpg                         Render an image\n  aski logo.png -b '#1e1e2e'             Blend transparency\n  aski animation.gif --loop              Replay until Ctrl+C\n  aski video.mp4 --precompute --loop     Prepare frames, then replay\n  aski video.mp4 --no-cache --prefetch 2  Limit buffered frames\n\nPlayback notes:\n  Videos require ffmpeg and ffprobe on PATH. Audio is not played.\n  --fps-limit slows playback; it does not skip frames.\n  --precompute requires caching and cannot be combined with --no-cache.\n  RGB percentages and hue units are accepted in background colors.\n  Use a terminal with 24-bit color support for the best results."
+    after_help = "Examples:\n  aski photo.jpg\n  aski --url 'https://example.com/photo.jpg'\n  aski logo.png -b '#1e1e2e'\n  aski animation.gif --loop\n  aski video.mp4 --precompute --loop\n\nUse --help for details. Press Ctrl+C to stop playback.",
+    after_long_help = "Examples:\n  aski photo.jpg                         Render an image\n  aski -u 'https://example.com/clip.gif'  Download and play a GIF\n  aski logo.png -b '#1e1e2e'             Blend transparency\n  aski animation.gif --loop              Replay until Ctrl+C\n  aski video.mp4 --precompute --loop     Prepare frames, then replay\n  aski video.mp4 --no-cache --prefetch 2  Limit buffered frames\n\nPlayback notes:\n  Videos require ffmpeg and ffprobe on PATH. Audio is not played.\n  --fps-limit slows playback; it does not skip frames.\n  --precompute requires caching and cannot be combined with --no-cache.\n  RGB percentages and hue units are accepted in background colors.\n  Use a terminal with 24-bit color support for the best results."
 )]
 pub struct Args {
     #[arg(
         value_name = "MEDIA",
-        help = "Image, GIF, or video to display",
-        long_help = "Path to the image, GIF, or video file to render in the terminal."
+        help = "Media file to display (HTTP/HTTPS address with --url)",
+        long_help = "Path to the image, GIF, or video file to render in the terminal.\nWith --url, treat this argument as a direct HTTP or HTTPS media URL."
     )]
     pub image: PathBuf,
+
+    #[arg(
+        short = 'u',
+        long = "url",
+        help_heading = "Input",
+        help = "Read MEDIA from an HTTP or HTTPS URL",
+        long_help = "Download MEDIA from a direct HTTP or HTTPS URL before rendering.\nFollows redirects and supports links without file extensions.\nThe temporary download is reused when looping and removed on exit.\nUse a direct media link, not a web page or streaming playlist.\nQuote URLs containing shell characters such as &."
+    )]
+    pub url: bool,
 
     // ── Display ────────────────────────────────────────────────────────────
     #[arg(
