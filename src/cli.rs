@@ -29,7 +29,7 @@ pub struct Args {
         long = "url",
         help_heading = "Input",
         help = "Read MEDIA from an HTTP or HTTPS URL",
-        long_help = "Download MEDIA from a direct HTTP or HTTPS URL before rendering.\nFollows redirects and supports links without file extensions.\nThe temporary download is reused when looping and removed on exit.\nUse a direct media link, not a web page or streaming playlist.\nQuote URLs containing shell characters such as &."
+        long_help = "Download MEDIA from a direct HTTP or HTTPS URL before rendering.\nFollows redirects and supports links without file extensions.\nThe temporary download is reused when looping and removed on exit.\nUse a direct media link, not a web page or streaming playlist.\nSites requiring browser verification must be downloaded in a browser.\nQuote URLs containing shell characters such as &."
     )]
     pub url: bool,
 

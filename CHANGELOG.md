@@ -1,5 +1,12 @@
 # Changelog
 
+# [2.0.1] - 2026-10-11
+
+### Added
+
+- Detect Cloudflare browser-verification responses and explain how to render a browser-downloaded file; add actionable
+  guidance for other HTTP 403 failures.
+
 ## [2.0.0] - 2026-10-11
 
 ### Added
@@ -84,6 +91,7 @@
 - Create main function to handle image loading, terminal size retrieval, and rendering logic.
 - Implement rendering functions for both opaque and alpha blending modes, outputting ANSI colored blocks.
 
+[2.0.1]: https://github.com/voximir-p/aski/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/voximir-p/aski/compare/v1.1.2...v2.0.0
 [1.1.2]: https://github.com/voximir-p/aski/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/voximir-p/aski/compare/v1.1.0...v1.1.1

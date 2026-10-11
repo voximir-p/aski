@@ -311,3 +311,52 @@ fn ctrl_c_cancels_a_stalled_download_and_removes_partial_file() {
     );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn cloudflare_challenges_explain_browser_workaround_without_leaking_url() {
+    // A challenge can replace any resource, even with a successful HTTP status.
+    for status in ["403 Forbidden", "200 OK"] {
+        let (base, worker) = server(vec![(
+            "/video.mp4?token=private",
+            response(
+                status,
+                "Content-Type: text/html\r\nCF-Mitigated: challenge\r\n",
+                b"<html>Checking your browser</html>",
+            ),
+        )]);
+        let output = run(&["-lovur1", &format!("{base}/video.mp4?token=private")]);
+        worker.join().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success());
+        assert!(
+            stderr.contains("Cloudflare browser verification"),
+            "{stderr}"
+        );
+        assert!(stderr.contains(status), "{stderr}");
+        assert!(stderr.contains("saved file without --url"), "{stderr}");
+        assert!(!stderr.contains("private"), "{stderr}");
+        assert!(
+            !stderr.contains("web page or streaming playlist"),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_forbidden_responses_do_not_assume_a_cloudflare_challenge() {
+    let (base, worker) = server(vec![(
+        "/video.mp4",
+        response("403 Forbidden", "Server: cloudflare\r\n", b"Denied"),
+    )]);
+    let output = run(&["-u", &format!("{base}/video.mp4")]);
+    worker.join().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("HTTP 403 Forbidden"), "{stderr}");
+    assert!(stderr.contains("server refused access"), "{stderr}");
+    assert!(stderr.contains("without --url"), "{stderr}");
+    assert!(
+        !stderr.contains("Cloudflare browser verification"),
+        "{stderr}"
+    );
+}

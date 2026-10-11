@@ -137,6 +137,12 @@ a GIF sharing page, or a streaming playlist. Quote URLs to protect shell charact
 such as `&`. HTTP and HTTPS are supported, including redirects (up to 10).
 HTTPS certificates are verified.
 
+A direct URL can still be protected by the hosting site. aski cannot complete
+browser verification such as a Cloudflare challenge or use your browser's login
+session. If a download reports browser verification or HTTP 403, open the URL in
+your browser, complete any verification, and save the media. Then render the local
+file without `--url`. Changing the user agent alone does not necessarily resolve these restrictions.
+
 The complete file is downloaded to a temporary directory before rendering, using
 bounded download buffers instead of loading the whole response into memory. Images
 and GIFs are identified by their contents, so missing extensions, query strings, and

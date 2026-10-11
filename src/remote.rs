@@ -61,9 +61,31 @@ async fn fetch(url: reqwest::Url, verbose: bool) -> io::Result<DownloadedMedia> 
         .build()
         .map_err(download_error)?;
     let mut response = client.get(url).send().await.map_err(download_error)?;
-    if !response.status().is_success() {
+    // Cloudflare identifies challenge pages with this header, regardless of
+    // the requested resource or HTTP status. Do not mistake one for media.
+    if response
+        .headers()
+        .get("cf-mitigated")
+        .is_some_and(|value| value == "challenge")
+    {
         return Err(io::Error::other(format!(
-            "Download failed: HTTP {}",
+            "Download blocked by Cloudflare browser verification (HTTP {}). \
+             Even direct media URLs can require a browser challenge, which aski cannot complete. \
+             Open the URL in your browser, complete verification, save the media, \
+             then run aski on the saved file without --url.",
+            response.status()
+        )));
+    }
+    if !response.status().is_success() {
+        let hint = if response.status() == reqwest::StatusCode::FORBIDDEN {
+            "; the server refused access. Direct media URLs may still require authentication, \
+             browser verification, or permission to download. Try saving the media in your \
+             browser and opening the saved file without --url"
+        } else {
+            ""
+        };
+        return Err(io::Error::other(format!(
+            "Download failed: HTTP {}{hint}",
             response.status()
         )));
     }
