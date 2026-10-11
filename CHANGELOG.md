@@ -11,6 +11,8 @@
 
 - Fix intermittent Windows URL test failures by explicitly using blocking I/O with timeouts on accepted HTTP test
   connections.
+- Build Windows ARM64 releases on a native Windows runner to avoid the `ring` / cargo-xwin `/imsvc` compiler error.
+- Check the Windows ARM64 release-profile build and executable in CI before release.
 
 ## [2.0.0] - 2026-10-11
 
@@ -96,6 +98,7 @@
 - Create main function to handle image loading, terminal size retrieval, and rendering logic.
 - Implement rendering functions for both opaque and alpha blending modes, outputting ANSI colored blocks.
 
+[Unreleased]: https://github.com/voximir-p/aski/compare/v2.0.1...HEAD
 [2.0.1]: https://github.com/voximir-p/aski/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/voximir-p/aski/compare/v1.1.2...v2.0.0
 [1.1.2]: https://github.com/voximir-p/aski/compare/v1.1.1...v1.1.2

@@ -342,6 +342,19 @@ color parsing, variable frame timing, CLI failures, GIF playback, video decoder 
 and URL downloads against a local HTTP server (redirects, content detection, errors, and cancellation).
 The benchmark measures reused rendering buffers at 360p, 1080p, and 4K; it excludes decoding and terminal I/O.
 
+Release builds use the cargo-dist version pinned in `dist-workspace.toml`.
+Windows ARM64 runs on `windows-11-arm` with its native Windows SDK. This avoids
+a `ring` / cargo-xwin compiler mismatch where Clang receives MSVC-style `/imsvc`
+flags. CI also builds that target with the `dist` profile and runs its `--version`
+command on Windows ARM64.
+
+After changing release configuration, use the pinned cargo-dist version to check it:
+
+```sh
+dist generate --check
+dist plan
+```
+
 ## Changelog
 
 Release history is tracked in [CHANGELOG.md](CHANGELOG.md).
