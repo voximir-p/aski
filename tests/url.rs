@@ -49,8 +49,14 @@ fn server(replies: Vec<(&str, Vec<u8>)>) -> (String, JoinHandle<()>) {
                     Err(error) => panic!("{error}"),
                 }
             };
+            // Windows inherits the listener's nonblocking mode on accept.
+            // Request reads and response writes below require blocking I/O.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             let mut request = Vec::new();
             let mut byte = [0];

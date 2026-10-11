@@ -7,6 +7,11 @@
 - Detect Cloudflare browser-verification responses and explain how to render a browser-downloaded file; add actionable
   guidance for other HTTP 403 failures.
 
+### Fixed
+
+- Fix intermittent Windows URL test failures by explicitly using blocking I/O with timeouts on accepted HTTP test
+  connections.
+
 ## [2.0.0] - 2026-10-11
 
 ### Added
