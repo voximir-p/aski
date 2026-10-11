@@ -1,325 +1,442 @@
-use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{self, IsTerminal, Write};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
-use crossterm::{cursor, execute, terminal};
+use aski::{MediaType, Renderer, compute_output_dims, frames};
+use crossterm::{cursor, execute, style, terminal};
 
-use crate::{
-    cli, frames,
-    media_render::{compute_output_dims, render_frame},
-    terminal_utils::{console_wh, status_row_under_video_from_ansi},
-};
+use crate::{cli, terminal_utils::console_wh};
 
-static RUNNING: AtomicBool = AtomicBool::new(true);
-
-struct TerminalSessionGuard;
-
-impl Drop for TerminalSessionGuard {
-    fn drop(&mut self) {
-        let _ = execute!(io::stdout(), terminal::LeaveAlternateScreen, cursor::Show);
-    }
+struct TerminalSession {
+    active: bool,
 }
 
-fn displayed_fps(frames_shown: u64, display_start: &mut Option<Instant>) -> f64 {
-    let elapsed_s = display_start
-        .get_or_insert_with(Instant::now)
-        .elapsed()
-        .as_secs_f64();
-
-    if frames_shown <= 1 || elapsed_s <= 0.0 {
-        0.0
-    } else {
-        frames_shown.saturating_sub(1) as f64 / elapsed_s
-    }
-}
-
-fn target_fps(delay: Duration) -> f64 {
-    if delay.is_zero() {
-        0.0
-    } else {
-        1.0 / delay.as_secs_f64()
-    }
-}
-
-fn sleep_to_next_frame(next_deadline: &mut Option<Instant>, frame_delay: Duration) -> bool {
-    if frame_delay.is_zero() {
-        return false;
-    }
-
-    let now = Instant::now();
-    let deadline = next_deadline.get_or_insert_with(|| now + frame_delay);
-
-    if now < *deadline {
-        std::thread::sleep(*deadline - now);
-        *deadline += frame_delay;
-        false
-    } else {
-        let mut missed = false;
-        while *deadline <= now {
-            *deadline += frame_delay;
-            missed = true;
+impl TerminalSession {
+    fn enter() -> io::Result<Self> {
+        let session = Self {
+            active: io::stdout().is_terminal(),
+        };
+        if session.active {
+            execute!(
+                io::stdout(),
+                terminal::EnterAlternateScreen,
+                cursor::Hide,
+                terminal::DisableLineWrap,
+                terminal::Clear(terminal::ClearType::All)
+            )?;
         }
-        missed
+        Ok(session)
     }
 }
 
-pub fn render_animated(args: &cli::Args, bg: (u8, u8, u8), media_type: frames::MediaType) {
-    let path = &args.image;
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = execute!(
+                io::stdout(),
+                style::ResetColor,
+                terminal::EnableLineWrap,
+                cursor::Show,
+                terminal::LeaveAlternateScreen
+            );
+        }
+    }
+}
 
-    ctrlc::set_handler(|| RUNNING.store(false, Ordering::Relaxed))
-        .expect("Failed to set Ctrl+C handler");
+struct RenderedFrame<T = String> {
+    ansi: T,
+    height: u64,
+    delay: Duration,
+}
 
-    let mut stdout = io::BufWriter::new(io::stdout());
+#[derive(Default)]
+struct PlaybackStats {
+    shown: u64,
+    rendered: u64,
+    cached: u64,
+    late: u64,
+    render_ms: f64,
+    loop_number: u64,
+    from_cache: bool,
+    started: Option<Instant>,
+    last_presented: Option<Instant>,
+}
 
-    execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide).ok();
-    let _terminal_guard = TerminalSessionGuard;
+impl PlaybackStats {
+    fn fps(&self) -> f64 {
+        match (self.started, self.last_presented) {
+            (Some(start), Some(last)) if last > start => {
+                self.shown.saturating_sub(1) as f64 / last.duration_since(start).as_secs_f64()
+            }
+            _ => 0.0,
+        }
+    }
+}
 
-    let mut cache: Vec<(String, u64, u64, Duration)> = Vec::new();
-    let mut last_status_row: Option<u64> = None;
+// Add the CURRENT frame's duration to the previous boundary. This matters for
+// variable-delay GIFs. If rendering falls behind, reset in O(1) rather than
+// repeatedly advancing a deadline or claiming that frames have been dropped.
+fn frame_deadline(previous: Option<Instant>, now: Instant, delay: Duration) -> (Instant, bool) {
+    let deadline = previous.unwrap_or(now).checked_add(delay).unwrap_or(now);
+    (deadline.max(now), deadline < now)
+}
 
-    let mut loop_count: u64 = 0;
-    let playback_start = Instant::now();
-
-    'outer: loop {
-        if !RUNNING.load(Ordering::Relaxed) {
+fn wait_for_frame(deadline: &mut Option<Instant>, delay: Duration, cancelled: &AtomicBool) -> bool {
+    let (next, late) = frame_deadline(*deadline, Instant::now(), delay);
+    *deadline = Some(next);
+    while !cancelled.load(Ordering::Relaxed) {
+        let remaining = next.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             break;
         }
+        std::thread::sleep(remaining.min(Duration::from_millis(25)));
+    }
+    late
+}
 
-        loop_count += 1;
-        let (cw, ch) = console_wh();
-        let rch = ch.saturating_sub(args.reserve).max(1);
+fn available_rows(args: &cli::Args, terminal_height: u64) -> u64 {
+    terminal_height
+        .saturating_sub(args.reserve.max(u64::from(args.verbose)))
+        .max(1)
+}
 
-        let cache_stale = cache.is_empty()
-            || cache
-                .first()
-                .map(|(_, w, h, _)| *w != cw || *h != rch)
-                .unwrap_or(true);
-
-        let mut rendered_frames: u64 = 0;
-        let mut cached_frames: u64 = 0;
-        let mut dropped_frames: u64 = 0;
-        let mut frames_shown: u64 = 0;
-        let mut display_start: Option<Instant> = None;
-        let mut next_deadline: Option<Instant> = None;
-
-        if cache_stale {
-            if !cache.is_empty() {
-                execute!(stdout, terminal::Clear(terminal::ClearType::All)).ok();
+fn status_line(stats: &PlaybackStats, delay: Duration, width: u64, verbose: bool) -> String {
+    let mode = if stats.from_cache { "CACHE" } else { "PLAY" };
+    let columns = width.saturating_sub(1) as usize;
+    let basic = format!(
+        "{mode}  frame {}  |  loop {}  |  Ctrl+C stop",
+        stats.shown, stats.loop_number
+    );
+    if verbose {
+        let fps = 1.0 / delay.as_secs_f64();
+        let detailed = format!(
+            "{mode}  {}  |  {:.1}/{fps:.1} FPS  |  {:.1}ms render  |  {} rendered / {} cached / {} late  |  Ctrl+C stop",
+            stats.shown,
+            stats.fps(),
+            stats.render_ms,
+            stats.rendered,
+            stats.cached,
+            stats.late
+        );
+        let compact = format!(
+            "{mode}  {}  |  {:.1}/{fps:.1} FPS  |  {} late  |  Ctrl+C stop",
+            stats.shown,
+            stats.fps(),
+            stats.late
+        );
+        for candidate in [detailed, compact] {
+            if candidate.len() <= columns {
+                return candidate;
             }
+        }
+    }
+    if basic.len() <= columns {
+        return basic;
+    }
+    let compact = format!("{mode}  {}  |  Ctrl+C stop", stats.shown);
+    if compact.len() <= columns {
+        return compact;
+    }
+    let minimal = format!("{mode}  Ctrl+C");
+    minimal[..minimal.len().min(columns)].to_owned()
+}
+
+fn show_progress(
+    output: &mut impl Write,
+    width: u64,
+    frames: u64,
+    bytes: usize,
+    elapsed: Duration,
+) -> io::Result<()> {
+    let columns = width.saturating_sub(1) as usize;
+    let detailed = format!(
+        "PREPARING  {frames} frames  |  {:.1} MiB  |  {:.1}s  |  Ctrl+C stop",
+        bytes as f64 / (1024.0 * 1024.0),
+        elapsed.as_secs_f64()
+    );
+    let compact = format!("PREPARING  {frames}  |  Ctrl+C stop");
+    let message = if detailed.len() <= columns {
+        detailed
+    } else {
+        compact
+    };
+    write!(
+        output,
+        "\x1b[H\x1b[2K{}",
+        &message[..message.len().min(columns)]
+    )?;
+    output.flush()
+}
+
+fn present(
+    output: &mut impl Write,
+    frame: &RenderedFrame<impl AsRef<str>>,
+    terminal: (u64, u64),
+    verbose: bool,
+    interactive: bool,
+    stats: &mut PlaybackStats,
+) -> io::Result<()> {
+    output.write_all(b"\x1b[H")?;
+    output.write_all(frame.ansi.as_ref().as_bytes())?;
+    let displayed_at = Instant::now();
+    stats.started.get_or_insert(displayed_at);
+    stats.last_presented = Some(displayed_at);
+    stats.shown += 1;
+    if (verbose || interactive) && frame.height < terminal.1 {
+        let status = status_line(stats, frame.delay, terminal.0, verbose);
+        write!(output, "\x1b[{};1H\x1b[2K{status}", frame.height + 1)?;
+    }
+    output.flush()
+}
+
+pub fn render_animated(args: &cli::Args, media_type: MediaType) -> io::Result<()> {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&cancelled);
+    ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed)).map_err(io::Error::other)?;
+    let session = TerminalSession::enter()?;
+    let mut stdout = io::BufWriter::new(io::stdout().lock());
+    let mut cache: Vec<RenderedFrame> = Vec::new();
+    let mut cache_terminal = None;
+    let mut stats = PlaybackStats::default();
+    let mut completed_loops = 0;
+    let cache_enabled = !args.no_cache && (args.loop_playback || args.precompute);
+
+    'playback: while !cancelled.load(Ordering::Relaxed) {
+        let terminal = console_wh();
+        stats.loop_number = completed_loops + 1;
+        let rows = available_rows(args, terminal.1);
+        let mut deadline = None;
+        if cache_terminal != Some(terminal) {
             cache.clear();
-
-            let stream = match frames::open_stream(path, &media_type, args.prefetch) {
-                Ok(stream) => stream,
-                Err(e) => {
-                    eprintln!("{}", e);
-                    break 'outer;
-                }
-            };
-
-            if args.verbose {
-                let msg = if args.precompute {
-                    format!("Precomputing frames at {}x{}...", cw, rch)
-                } else {
-                    format!("Decoding and rendering frames at {}x{}...", cw, rch)
-                };
-                let max_cols = cw.saturating_sub(1) as usize;
-                let msg: String = msg.chars().take(max_cols).collect();
-                let banner = format!("\x1b[1;1H\x1b[2K{}", msg);
-                let raw = stdout.get_mut();
-                raw.write_all(banner.as_bytes()).ok();
-                raw.flush().ok();
+            cache_terminal = None;
+        }
+        if cache.is_empty() {
+            let prepare_start = Instant::now();
+            let mut last_progress = prepare_start;
+            let mut cache_bytes = 0;
+            if args.precompute && session.active {
+                show_progress(&mut stdout, terminal.0, 0, 0, Duration::ZERO)?;
             }
-
-            let decode_start = Instant::now();
-
-            for frame_result in stream {
-                if !RUNNING.load(Ordering::Relaxed) {
-                    break 'outer;
+            let stream = frames::open_stream_with_cancel(
+                &args.image,
+                &media_type,
+                args.prefetch,
+                Arc::clone(&cancelled),
+            )
+            .map_err(io::Error::other)?;
+            let mut renderer = None;
+            let mut geometry = None;
+            let mut frame_count = 0;
+            for frame in stream {
+                if cancelled.load(Ordering::Relaxed) {
+                    break 'playback;
                 }
-
-                let (new_cw, new_ch) = console_wh();
-                let new_rch = new_ch.saturating_sub(args.reserve).max(1);
-                if new_cw != cw || new_rch != rch {
-                    execute!(stdout, terminal::Clear(terminal::ClearType::All)).ok();
+                if console_wh() != terminal {
+                    execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
                     cache.clear();
-                    continue 'outer;
+                    continue 'playback;
                 }
-
-                let frame = match frame_result {
-                    Ok(f) => f,
-                    Err(e) => {
-                        eprintln!("Frame decode error: {}", e);
-                        break 'outer;
-                    }
-                };
-
-                let (out_w, out_h) = compute_output_dims(
+                let frame = frame.map_err(io::Error::other)?;
+                let (ow, oh) = compute_output_dims(
                     frame.width,
                     frame.height,
-                    cw,
-                    rch,
+                    terminal.0,
+                    rows,
                     args.cell_width,
                     args.cell_height,
                 );
-                let render_start = Instant::now();
-                let ansi = render_frame(
-                    &frame.rgba,
-                    frame.width,
-                    frame.height,
-                    out_w,
-                    out_h,
-                    bg,
-                    args.opaque,
-                );
-                let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-                let delay = if args.fps_limit > 0 {
-                    frame
-                        .delay
-                        .max(Duration::from_secs_f64(1.0 / args.fps_limit.max(1) as f64))
-                } else {
-                    frame.delay
-                };
-
-                if !args.no_cache {
-                    cache.push((ansi.clone(), cw, rch, delay));
-                }
-                rendered_frames += 1;
-
-                if !args.precompute {
-                    frames_shown += 1;
-
-                    let mut buf = Vec::with_capacity(ansi.len() + 256);
-                    buf.extend_from_slice(b"\x1b[H");
-                    buf.extend_from_slice(ansi.as_bytes());
-
-                    if args.verbose {
-                        let actual_fps = displayed_fps(frames_shown, &mut display_start);
-                        let target_fps = target_fps(delay);
-                        let status = format!(
-                            "frame {} | loop {} | FPS: {:.1}/{:.1} | render: {:.1}ms | rendered: {} dropped: {}",
-                            frames_shown,
-                            loop_count,
-                            actual_fps,
-                            target_fps,
-                            render_ms,
-                            rendered_frames,
-                            dropped_frames,
-                        );
-                        let max_cols = cw.saturating_sub(1) as usize;
-                        let status: String = status.chars().take(max_cols).collect();
-                        let status_row = (out_h + 1).min(ch.max(1));
-                        last_status_row = Some(status_row);
-                        let _ = write!(buf, "\x1b[{};1H\x1b[2K{}", status_row, status);
-                    }
-
-                    let raw = stdout.get_mut();
-                    raw.write_all(&buf).ok();
-                    raw.flush().ok();
-
-                    if sleep_to_next_frame(&mut next_deadline, delay) {
-                        dropped_frames += 1;
-                    }
-                }
-            }
-
-            if args.verbose && args.precompute {
-                let elapsed = decode_start.elapsed();
-                let secs = elapsed.as_secs_f64();
-                eprintln!(
-                    "Precomputation complete: {} frames in {:.2}s ({:.1} frames/s)",
-                    cache.len(),
-                    secs,
-                    if secs > 0.0 {
-                        cache.len() as f64 / secs
-                    } else {
-                        0.0
-                    },
-                );
-            }
-        }
-
-        let should_play_from_cache = args.precompute || !cache_stale;
-        if should_play_from_cache && !cache.is_empty() {
-            display_start = None;
-            next_deadline = None;
-            let frame_count = cache.len();
-            for (i, (ansi, _, _, delay)) in cache.iter().enumerate() {
-                if !RUNNING.load(Ordering::Relaxed) {
-                    break 'outer;
-                }
-
-                let (cur_cw, cur_ch) = console_wh();
-                let cur_rch = cur_ch.saturating_sub(args.reserve).max(1);
-                if cur_cw != cw || cur_rch != rch {
-                    execute!(stdout, terminal::Clear(terminal::ClearType::All)).ok();
-                    cache.clear();
-                    continue 'outer;
-                }
-
-                let delay = *delay;
-                cached_frames += 1;
-                frames_shown += 1;
-
-                let mut buf = Vec::with_capacity(ansi.len() + 256);
-                buf.extend_from_slice(b"\x1b[H");
-                buf.extend_from_slice(ansi.as_bytes());
-
-                if args.verbose {
-                    let actual_fps = displayed_fps(frames_shown, &mut display_start);
-                    let target_fps = target_fps(delay);
-                    let status = format!(
-                        "frame {}/{} | loop {} | FPS: {:.1}/{:.1} | cache | cached: {} rendered: {} dropped: {}",
-                        i + 1,
-                        frame_count,
-                        loop_count,
-                        actual_fps,
-                        target_fps,
-                        cached_frames,
-                        rendered_frames,
-                        dropped_frames,
+                let new_geometry = (frame.width, frame.height, ow, oh);
+                if geometry != Some(new_geometry) {
+                    renderer = Some(
+                        Renderer::new(
+                            frame.width,
+                            frame.height,
+                            ow,
+                            oh,
+                            args.background,
+                            args.opaque,
+                        )
+                        .map_err(io::Error::other)?,
                     );
-                    let max_cols = cw.saturating_sub(1) as usize;
-                    let status: String = status.chars().take(max_cols).collect();
-                    let status_row = status_row_under_video_from_ansi(ansi, ch);
-                    last_status_row = Some(status_row);
-                    let _ = write!(buf, "\x1b[{};1H\x1b[2K{}", status_row, status);
+                    geometry = Some(new_geometry);
+                    execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
                 }
-
-                let raw = stdout.get_mut();
-                raw.write_all(&buf).ok();
-                raw.flush().ok();
-
-                if sleep_to_next_frame(&mut next_deadline, delay) {
-                    dropped_frames += 1;
+                let render_start = Instant::now();
+                let ansi = renderer
+                    .as_mut()
+                    .unwrap()
+                    .render(&frame.rgba)
+                    .map_err(io::Error::other)?;
+                stats.render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+                let min_delay = if args.fps_limit == 0 {
+                    Duration::ZERO
+                } else {
+                    Duration::from_secs_f64(1.0 / args.fps_limit as f64)
+                };
+                let rendered = RenderedFrame {
+                    ansi,
+                    height: oh,
+                    delay: frame.delay.max(min_delay),
+                };
+                frame_count += 1;
+                stats.rendered += 1;
+                if !args.precompute {
+                    stats.from_cache = false;
+                    present(
+                        &mut stdout,
+                        &rendered,
+                        terminal,
+                        args.verbose,
+                        session.active,
+                        &mut stats,
+                    )?;
+                    if wait_for_frame(&mut deadline, rendered.delay, &cancelled) {
+                        stats.late += 1;
+                    }
+                }
+                if cache_enabled {
+                    cache_bytes += rendered.ansi.len();
+                    cache.push(RenderedFrame {
+                        ansi: rendered.ansi.to_owned(),
+                        height: rendered.height,
+                        delay: rendered.delay,
+                    });
+                }
+                if args.precompute
+                    && session.active
+                    && (frame_count == 1 || last_progress.elapsed() >= Duration::from_millis(100))
+                {
+                    show_progress(
+                        &mut stdout,
+                        terminal.0,
+                        frame_count,
+                        cache_bytes,
+                        prepare_start.elapsed(),
+                    )?;
+                    last_progress = Instant::now();
                 }
             }
+            if cancelled.load(Ordering::Relaxed) {
+                break;
+            }
+            if frame_count == 0 {
+                return Err(io::Error::other("No frames decoded from media"));
+            }
+            cache_terminal = Some(terminal);
+            if !args.precompute {
+                completed_loops += 1;
+                if !args.loop_playback {
+                    break;
+                }
+                continue;
+            }
         }
-
+        if args.precompute {
+            execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
+        }
+        let mut last_height = None;
+        for frame in &cache {
+            if cancelled.load(Ordering::Relaxed) {
+                break 'playback;
+            }
+            if console_wh() != terminal {
+                execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
+                cache.clear();
+                cache_terminal = None;
+                continue 'playback;
+            }
+            if last_height.is_some_and(|h| h != frame.height) {
+                execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
+            }
+            last_height = Some(frame.height);
+            stats.cached += 1;
+            stats.from_cache = true;
+            stats.render_ms = 0.0;
+            present(
+                &mut stdout,
+                frame,
+                terminal,
+                args.verbose,
+                session.active,
+                &mut stats,
+            )?;
+            if wait_for_frame(&mut deadline, frame.delay, &cancelled) {
+                stats.late += 1;
+            }
+        }
+        completed_loops += 1;
         if !args.loop_playback {
             break;
         }
     }
-
+    stdout.flush()?;
+    drop(stdout);
+    drop(session);
     if args.verbose {
-        let total = playback_start.elapsed();
-        let frame_count = cache.len() as u64;
-        let total_frames = loop_count * frame_count;
-        let (_, ch) = console_wh();
-        let status_row = last_status_row.unwrap_or(ch).min(ch.max(1));
-        let clear = format!("\x1b[{};1H\x1b[2K", status_row);
-        let raw = stdout.get_mut();
-        raw.write_all(clear.as_bytes()).ok();
-        raw.flush().ok();
         eprintln!(
-            "Playback finished: {} loops, {} total frames in {:.2}s ({:.1} avg FPS)",
-            loop_count,
-            total_frames,
-            total.as_secs_f64(),
-            if total.as_secs_f64() > 0.0 {
-                total_frames as f64 / total.as_secs_f64()
-            } else {
-                0.0
-            }
+            "Playback finished: {completed_loops} complete loops, {} displayed frames | rendered: {} cached: {} late: {} | {:.1} avg FPS",
+            stats.shown,
+            stats.rendered,
+            stats.cached,
+            stats.late,
+            stats.fps()
         );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variable_delays_use_current_frame_duration() {
+        let start = Instant::now();
+        let (first, late) = frame_deadline(None, start, Duration::from_millis(20));
+        assert!(!late);
+        let (second, late) = frame_deadline(
+            Some(first),
+            start + Duration::from_millis(25),
+            Duration::from_millis(100),
+        );
+        assert!(!late);
+        assert_eq!(second.duration_since(start), Duration::from_millis(120));
+        let now = start + Duration::from_secs(100);
+        assert_eq!(
+            frame_deadline(Some(second), now, Duration::from_nanos(1)),
+            (now, true)
+        );
+    }
+    #[test]
+    fn status_adapts_to_small_terminals() {
+        let stats = PlaybackStats {
+            shown: 123,
+            loop_number: 2,
+            ..Default::default()
+        };
+        for width in [1, 2, 10, 25, 40, 80, 160] {
+            let line = status_line(&stats, Duration::from_millis(40), width, true);
+            assert!(line.len() < width as usize);
+            if width >= 25 {
+                assert!(line.contains("Ctrl+C"));
+            }
+        }
+        assert!(status_line(&stats, Duration::from_millis(40), 80, true).contains("FPS"));
+        assert!(!status_line(&stats, Duration::from_millis(40), 80, false).contains("FPS"));
+    }
+    #[test]
+    fn summary_fps_uses_display_intervals_not_final_frame_hold() {
+        let start = Instant::now();
+        let stats = PlaybackStats {
+            shown: 4,
+            started: Some(start),
+            last_presented: Some(start + Duration::from_secs(3)),
+            ..Default::default()
+        };
+        assert_eq!(stats.fps(), 1.0);
+        assert_eq!(PlaybackStats::default().fps(), 0.0);
     }
 }

@@ -1,18 +1,26 @@
 mod animated_playback;
 mod cli;
-mod frames;
-mod media_render;
-mod render;
 mod static_playback;
 mod terminal_utils;
 
-fn main() {
-    let args = cli::parse_args();
-    let path = &args.image;
-    let bg = cli::parse_color(&args.background);
+use std::io;
+use std::process::ExitCode;
 
-    match frames::detect_media_type(path) {
-        frames::MediaType::Static => static_playback::render_static(&args, bg),
-        media_type => animated_playback::render_animated(&args, bg, media_type),
+fn run() -> io::Result<()> {
+    let args = cli::parse_args();
+    match aski::frames::detect_media_type(&args.image) {
+        aski::MediaType::Static => static_playback::render_static(&args),
+        media_type => animated_playback::render_animated(&args, media_type),
+    }
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("aski: {error}");
+            ExitCode::FAILURE
+        }
     }
 }

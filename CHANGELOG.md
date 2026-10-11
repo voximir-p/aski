@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Adaptive playback status with PLAY/CACHE modes, a Ctrl+C hint, and progress during precomputation.
+- Reusable Rust library with area-filtered rendering, color parsing, lazy frame streams, and typed errors.
+- Regression tests, a rendering benchmark, and cross-platform formatting, lint, and test CI.
+- Cooperative cancellation for video frame waits and unbuffered video delivery with `--prefetch 0`.
+
+### Changed
+
+- Use separable area filtering with precomputed coverage, reusable row buffers, and integer interior sums.
+- Avoid repeated ANSI color escapes and retain frame caches only for looping or precomputed playback.
+- Validate colors, cell geometry, prefetch sizes, and conflicting playback flags during argument parsing.
+- Refresh short and long CLI help, usage examples, argument names, README, troubleshooting, and library documentation.
+- Document that FPS limiting slows playback without dropping frames.
+
+### Fixed
+
+- Render small images correctly instead of rejecting them or leaving holes when upscaling.
+- Handle Unicode color input without panicking; support RGB percentages, hue units, and CSS Lab's D50 white point.
+- Preserve per-frame GIF timing and count displayed frames correctly with caching disabled or interrupted playback.
+- Report decoder failures, truncated video frames, and output errors with a failing exit status.
+- Restore terminal state on failures and cancellation, and reap ffmpeg on early stream drop.
+- Disable implicit video rotation so raw frame geometry agrees with probed dimensions.
+- End static output on a fresh line and handle broken pipes quietly.
+
 ## [1.1.2] - 2026-03-20
 
 ### Fixed
@@ -55,6 +82,7 @@
 - Create main function to handle image loading, terminal size retrieval, and rendering logic.
 - Implement rendering functions for both opaque and alpha blending modes, outputting ANSI colored blocks.
 
+[Unreleased]: https://github.com/voximir-p/aski/compare/v1.1.2...HEAD
 [1.1.2]: https://github.com/voximir-p/aski/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/voximir-p/aski/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/voximir-p/aski/compare/v1.0.1...v1.1.0

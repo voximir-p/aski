@@ -1,18 +1,25 @@
+#[cfg(test)]
+use clap::CommandFactory;
+use clap::Parser;
 use clap::builder::Styles;
 use clap::builder::styling::{AnsiColor, Color, Style};
-use clap::{CommandFactory, FromArgMatches, Parser};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "aski",
-    about = "Render an image as ANSI ASCII art",
+    about = "Render images, GIFs, and videos in a true-color terminal",
     version,
-    arg_required_else_help = true
+    styles = make_styles(),
+    max_term_width = 100,
+    arg_required_else_help = true,
+    after_help = "Examples:\n  aski photo.jpg\n  aski logo.png -b '#1e1e2e'\n  aski animation.gif --loop\n  aski video.mp4 --precompute --loop\n\nUse --help for details. Press Ctrl+C to stop playback.",
+    after_long_help = "Examples:\n  aski photo.jpg                         Render an image\n  aski logo.png -b '#1e1e2e'             Blend transparency\n  aski animation.gif --loop              Replay until Ctrl+C\n  aski video.mp4 --precompute --loop     Prepare frames, then replay\n  aski video.mp4 --no-cache --prefetch 2  Limit buffered frames\n\nPlayback notes:\n  Videos require ffmpeg and ffprobe on PATH. Audio is not played.\n  --fps-limit slows playback; it does not skip frames.\n  --precompute requires caching and cannot be combined with --no-cache.\n  RGB percentages and hue units are accepted in background colors.\n  Use a terminal with 24-bit color support for the best results."
 )]
 pub struct Args {
     #[arg(
-        help = "Input media file (image, GIF, or video)",
+        value_name = "MEDIA",
+        help = "Image, GIF, or video to display",
         long_help = "Path to the image, GIF, or video file to render in the terminal."
     )]
     pub image: PathBuf,
@@ -21,19 +28,21 @@ pub struct Args {
     #[arg(
         short = 'b',
         long = "background",
-        default_value = "#15161c",
+        default_value = "#1a1515",
+        value_name = "COLOR",
+        value_parser = aski::parse_color,
         help_heading = "Display",
         help = "Background color for transparent areas",
-        long_help = "Color to show behind transparent areas of the image.\nAccepts most CSS color formats: #15161c, #abc, rgb(21,22,28),\nhsl(235,14%,10%), hwb(), lab(), lch(), oklab(), oklch().\nThis only visibly affects images with transparency (PNG, WebP, GIF)."
+        long_help = "Color to show behind transparent areas of the image.\nAccepts CSS-like color formats: #15161c, #abc, rgb(21,22,28),\nhsl(235,14%,10%), hwb(), lab(), lch(), oklab(), oklch().\nRGB percentages and hue units (deg, rad, grad, turn) are supported.\nThe background must be opaque. Only transparent source pixels change."
     )]
-    pub background: String,
+    pub background: aski::Color,
 
     #[arg(
         short = 'o',
         long = "opaque",
         help_heading = "Display",
-        help = "Treat pixels as fully opaque (faster)",
-        long_help = "Render every pixel as fully opaque, skipping transparency math.\nUse this when your image has no meaningful alpha channel for a speed\nboost. Internally uses a 32-bit RGB accumulator instead of the\ndefault 64-bit alpha-weighted path, halving hot-loop memory traffic."
+        help = "Treat pixels as fully opaque (should render faster)",
+        long_help = "Render every pixel as fully opaque, skipping transparency math.\nUse this when your image has no meaningful alpha channel to skip\ncompositing against the background color."
     )]
     pub opaque: bool,
 
@@ -44,7 +53,7 @@ pub struct Args {
         value_name = "ROWS",
         help_heading = "Display",
         help = "Reserve rows at terminal bottom",
-        long_help = "Number of terminal rows to leave blank at the bottom of the screen\nso the rendered image does not overlap your shell prompt or status bar."
+        long_help = "Keep this many rows below the image. Animated playback uses one\nreserved row for its status line. With --verbose, at least one row\nis reserved when the terminal has room. Set to 0 for maximum image area."
     )]
     pub reserve: u64,
 
@@ -52,20 +61,22 @@ pub struct Args {
     #[arg(
         long = "cell-width",
         default_value_t = 10,
+        value_parser = clap::value_parser!(u32).range(1..),
         value_name = "PX",
         help_heading = "Scaling",
         help = "Terminal cell width hint in pixels",
-        long_help = "Pixel width of one terminal cell, used to preserve the correct aspect\nratio when mapping image pixels to character cells. The default of 10\nmatches most monospace fonts. Raise this value if the output looks\nhorizontally squashed; lower it if it looks stretched."
+        long_help = "Pixel width of one terminal cell, used to preserve the correct aspect\nratio when mapping image pixels to character cells. The default of 10\nis a starting point. Lower this value if the output looks\nhorizontally squashed; raise it if it looks stretched."
     )]
     pub cell_width: u32,
 
     #[arg(
         long = "cell-height",
         default_value_t = 22,
+        value_parser = clap::value_parser!(u32).range(1..),
         value_name = "PX",
         help_heading = "Scaling",
         help = "Terminal cell height hint in pixels",
-        long_help = "Pixel height of one terminal cell, used together with --cell-width\nto preserve aspect ratio. The default of 22 matches most monospace\nfonts. Lower this if the output looks vertically squashed; raise it\nif it looks stretched."
+        long_help = "Pixel height of one terminal cell, used together with --cell-width\nto preserve aspect ratio. The default of 22 matches most monospace\nfonts. Raise this if the output looks vertically squashed; lower it\nif it looks stretched."
     )]
     pub cell_height: u32,
 
@@ -75,16 +86,17 @@ pub struct Args {
         long = "loop",
         help_heading = "Playback",
         help = "Loop playback until interrupted",
-        long_help = "Keep playing the animation or video in an infinite loop until\nCtrl+C is pressed. After the first pass, all frames are served\ndirectly from the in-memory ANSI cache with no re-decoding overhead."
+        long_help = "Keep playing the animation or video in an infinite loop until\nCtrl+C is pressed. Unless --no-cache is set, later passes reuse\nrendered frames from memory."
     )]
     pub loop_playback: bool,
 
     #[arg(
         short = 'p',
         long = "precompute",
+        conflicts_with = "no_cache",
         help_heading = "Playback",
         help = "Render all frames before playback",
-        long_help = "Decode and render every frame into memory before playback begins.\nThis causes a startup pause proportional to the video length, but\nguarantees perfectly smooth, stutter-free playback from frame one.\nWithout this flag, frames are rendered on the fly during the first\npass and cached for all subsequent loops."
+        long_help = "Decode and render every frame into memory before playback begins.\nThis causes a startup pause proportional to the video length, and\nremoves decoding and rendering work from playback.\nWithout this flag, frames are rendered on demand. Frames are cached\nonly when looping is requested."
     )]
     pub precompute: bool,
 
@@ -94,7 +106,7 @@ pub struct Args {
         value_name = "FPS",
         help_heading = "Playback",
         help = "Cap playback FPS (0 = source FPS)",
-        long_help = "Cap playback speed to at most N frames per second. Set to 0 (default)\nto follow the source frame rate exactly. Handy on slow machines to cut\nCPU usage, or to inspect high-fps content frame by frame. Technically,\nthis floors the per-frame sleep duration to 1000 / N milliseconds."
+        long_help = "Cap playback speed to at most N frames per second. Set to 0 (default)\nto follow the source timing. Handy on slow machines to cut\nCPU usage per second, or to inspect high-FPS content. This slows\nplayback without skipping frames; it does not preserve video duration."
     )]
     pub fps_limit: u64,
 
@@ -102,10 +114,11 @@ pub struct Args {
     #[arg(
         long = "prefetch",
         default_value_t = 8,
+        value_parser = parse_prefetch,
         value_name = "FRAMES",
         help_heading = "Performance",
         help = "Decoder prefetch buffer size",
-        long_help = "How many video frames the background ffmpeg decoder thread buffers\nahead of the display thread. A larger buffer absorbs decode slowdowns\nand makes playback smoother; a smaller buffer lowers peak RAM and\nreduces the startup delay before the first frame appears.\nHas no effect on GIFs or static images."
+        long_help = "How many video frames the background ffmpeg decoder thread buffers\nahead of the display thread. A larger buffer absorbs decode slowdowns\nand makes playback smoother; a smaller buffer lowers peak RAM and\nreduces the startup delay before the first frame appears.\nAccepts 0 to 1024. Set to 0 for unbuffered delivery.\nHas no effect on GIFs or static images."
     )]
     pub prefetch: usize,
 
@@ -123,267 +136,22 @@ pub struct Args {
         long = "verbose",
         help_heading = "Diagnostics",
         help = "Show runtime diagnostics",
-        long_help = "Print detailed runtime information to stderr while running.\nReports image and terminal dimensions, effective output cell count,\nper-frame render times, live FPS vs. target FPS, cache hit/miss\ncounts, and a final playback summary. Useful for diagnosing\nperformance issues or verifying scaling behaviour."
+        long_help = "Show image dimensions and a final playback summary on stderr.\nDuring animation, show FPS, render time, and cache/late-frame counts\nwhen the terminal is wide enough. Narrow windows show a compact status."
     )]
     pub verbose: bool,
 }
 
-const DEFAULT: (u8, u8, u8) = (0x15, 0x16, 0x1c);
-
-fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
-    let s = s
-        .strip_prefix("0x")
-        .or_else(|| s.strip_prefix("0X"))
-        .or_else(|| s.strip_prefix('#'))
-        .unwrap_or(s);
-    match s.len() {
-        3 => {
-            let r = u8::from_str_radix(&s[0..1], 16).ok()?;
-            let g = u8::from_str_radix(&s[1..2], 16).ok()?;
-            let b = u8::from_str_radix(&s[2..3], 16).ok()?;
-            Some((r << 4 | r, g << 4 | g, b << 4 | b))
-        }
-        6 => {
-            let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-            Some((r, g, b))
-        }
-        _ => None,
-    }
-}
-
-fn parse_func_args(s: &str) -> Option<Vec<f64>> {
-    let inner = s.trim();
-    if inner.is_empty() {
-        return None;
-    }
-    // Split on comma or whitespace, strip '%', parse as f64
-    let parts: Vec<f64> = inner
-        .split(|c: char| c == ',' || c == '/')
-        .flat_map(|p| p.split_whitespace())
-        .map(|p| p.trim_end_matches('%'))
-        .filter(|p| !p.is_empty())
-        .map(|p| p.parse::<f64>())
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    Some(parts)
-}
-
-fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
-    let s = s / 100.0;
-    let l = l / 100.0;
-    let h = ((h % 360.0) + 360.0) % 360.0;
-
-    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
-    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
-    let m = l - c / 2.0;
-
-    let (r1, g1, b1) = match h as u32 {
-        0..=59 => (c, x, 0.0),
-        60..=119 => (x, c, 0.0),
-        120..=179 => (0.0, c, x),
-        180..=239 => (0.0, x, c),
-        240..=299 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-
-    (
-        ((r1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
-        ((g1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
-        ((b1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
-    )
-}
-
-fn hwb_to_rgb(h: f64, w: f64, b: f64) -> (u8, u8, u8) {
-    let w = w / 100.0;
-    let b = b / 100.0;
-    let (w, b) = if w + b > 1.0 {
-        let sum = w + b;
-        (w / sum, b / sum)
-    } else {
-        (w, b)
-    };
-    let (r, g, bl) = hsl_to_rgb(h, 100.0, 50.0);
-    let f = |c: u8| {
-        ((c as f64 / 255.0 * (1.0 - w - b) + w) * 255.0)
-            .round()
-            .clamp(0.0, 255.0) as u8
-    };
-    (f(r), f(g), f(bl))
-}
-
-fn linear_to_srgb(c: f64) -> f64 {
-    if c <= 0.0031308 {
-        12.92 * c
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    }
-}
-
-fn linear_rgb_to_srgb(r: f64, g: f64, b: f64) -> (u8, u8, u8) {
-    (
-        (linear_to_srgb(r) * 255.0).round().clamp(0.0, 255.0) as u8,
-        (linear_to_srgb(g) * 255.0).round().clamp(0.0, 255.0) as u8,
-        (linear_to_srgb(b) * 255.0).round().clamp(0.0, 255.0) as u8,
-    )
-}
-
-fn lab_to_rgb(l: f64, a: f64, b: f64) -> (u8, u8, u8) {
-    // CIE Lab -> XYZ (D65)
-    let fy = (l + 16.0) / 116.0;
-    let fx = a / 500.0 + fy;
-    let fz = fy - b / 200.0;
-
-    let xr = if fx.powi(3) > 0.008856 {
-        fx.powi(3)
-    } else {
-        (116.0 * fx - 16.0) / 903.3
-    };
-    let yr = if l > 7.9996 { fy.powi(3) } else { l / 903.3 };
-    let zr = if fz.powi(3) > 0.008856 {
-        fz.powi(3)
-    } else {
-        (116.0 * fz - 16.0) / 903.3
-    };
-
-    // D65 white point
-    let x = xr * 0.95047;
-    let y = yr * 1.00000;
-    let z = zr * 1.08883;
-
-    // XYZ -> linear sRGB
-    let rl = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
-    let gl = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
-    let bl = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
-
-    linear_rgb_to_srgb(rl, gl, bl)
-}
-
-fn lch_to_rgb(l: f64, c: f64, h: f64) -> (u8, u8, u8) {
-    let h_rad = h.to_radians();
-    let a = c * h_rad.cos();
-    let b = c * h_rad.sin();
-    lab_to_rgb(l, a, b)
-}
-
-fn oklab_to_rgb(l: f64, a: f64, b: f64) -> (u8, u8, u8) {
-    // Oklab -> LMS (approximate inverse)
-    let l_ = l + 0.3963377774 * a + 0.2158037573 * b;
-    let m_ = l - 0.1055613458 * a - 0.0638541728 * b;
-    let s_ = l - 0.0894841775 * a - 1.2914855480 * b;
-
-    let l3 = l_ * l_ * l_;
-    let m3 = m_ * m_ * m_;
-    let s3 = s_ * s_ * s_;
-
-    // LMS -> linear sRGB
-    let rl = 4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
-    let gl = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
-    let bl = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
-
-    linear_rgb_to_srgb(rl, gl, bl)
-}
-
-fn oklch_to_rgb(l: f64, c: f64, h: f64) -> (u8, u8, u8) {
-    let h_rad = h.to_radians();
-    let a = c * h_rad.cos();
-    let b = c * h_rad.sin();
-    oklab_to_rgb(l, a, b)
-}
-
-pub fn parse_color(input: &str) -> (u8, u8, u8) {
-    let s = input.trim();
-
-    // Try hex formats: #abc, #aabbcc, 0xabc, 0xaabbcc
-    if s.starts_with('#') || s.starts_with("0x") || s.starts_with("0X") {
-        if let Some(c) = parse_hex(s) {
-            return c;
-        }
-    }
-
-    // Try functional notations: rgb(), hsl(), hwb()
-    if let Some(rest) = s.strip_prefix("rgb(").or_else(|| s.strip_prefix("rgba(")) {
-        if let Some(inner) = rest.strip_suffix(')') {
-            if let Some(args) = parse_func_args(inner) {
-                if args.len() >= 3 {
-                    return (
-                        args[0].round().clamp(0.0, 255.0) as u8,
-                        args[1].round().clamp(0.0, 255.0) as u8,
-                        args[2].round().clamp(0.0, 255.0) as u8,
-                    );
-                }
-            }
-        }
-    }
-
-    if let Some(rest) = s.strip_prefix("hsl(").or_else(|| s.strip_prefix("hsla(")) {
-        if let Some(inner) = rest.strip_suffix(')') {
-            if let Some(args) = parse_func_args(inner) {
-                if args.len() >= 3 {
-                    return hsl_to_rgb(args[0], args[1], args[2]);
-                }
-            }
-        }
-    }
-
-    if let Some(rest) = s.strip_prefix("hwb(") {
-        if let Some(inner) = rest.strip_suffix(')') {
-            if let Some(args) = parse_func_args(inner) {
-                if args.len() >= 3 {
-                    return hwb_to_rgb(args[0], args[1], args[2]);
-                }
-            }
-        }
-    }
-
-    if let Some(rest) = s.strip_prefix("lab(") {
-        if let Some(inner) = rest.strip_suffix(')') {
-            if let Some(args) = parse_func_args(inner) {
-                if args.len() >= 3 {
-                    return lab_to_rgb(args[0], args[1], args[2]);
-                }
-            }
-        }
-    }
-
-    if let Some(rest) = s.strip_prefix("lch(") {
-        if let Some(inner) = rest.strip_suffix(')') {
-            if let Some(args) = parse_func_args(inner) {
-                if args.len() >= 3 {
-                    return lch_to_rgb(args[0], args[1], args[2]);
-                }
-            }
-        }
-    }
-
-    if let Some(rest) = s.strip_prefix("oklab(") {
-        if let Some(inner) = rest.strip_suffix(')') {
-            if let Some(args) = parse_func_args(inner) {
-                if args.len() >= 3 {
-                    return oklab_to_rgb(args[0], args[1], args[2]);
-                }
-            }
-        }
-    }
-
-    if let Some(rest) = s.strip_prefix("oklch(") {
-        if let Some(inner) = rest.strip_suffix(')') {
-            if let Some(args) = parse_func_args(inner) {
-                if args.len() >= 3 {
-                    return oklch_to_rgb(args[0], args[1], args[2]);
-                }
-            }
-        }
-    }
-
-    // Try as bare 6-digit or 3-digit hex without prefix
-    if let Some(c) = parse_hex(s) {
-        return c;
-    }
-
-    eprintln!("Invalid color '{}', using default #15161c", input);
-    DEFAULT
+fn parse_prefetch(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n <= aski::frames::MAX_PREFETCH)
+        .ok_or_else(|| {
+            format!(
+                "expected a frame count from 0 to {}",
+                aski::frames::MAX_PREFETCH
+            )
+        })
 }
 
 fn make_styles() -> Styles {
@@ -412,5 +180,25 @@ fn make_styles() -> Styles {
 }
 
 pub fn parse_args() -> Args {
-    Args::from_arg_matches(&Args::command().styles(make_styles()).get_matches()).unwrap()
+    Args::parse()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_arguments_before_opening_media() {
+        for args in [
+            vec!["aski", "x", "--cell-width", "0"],
+            vec!["aski", "x", "--prefetch", "18446744073709551615"],
+            vec!["aski", "x", "--cell-height", "0"],
+            vec!["aski", "x", "--background", "#éa"],
+            vec!["aski", "x", "--precompute", "--no-cache"],
+        ] {
+            assert!(Args::try_parse_from(args).is_err());
+        }
+        assert!(Args::try_parse_from(["aski", "x", "--prefetch", "0"]).is_ok());
+        Args::command().debug_assert();
+    }
 }

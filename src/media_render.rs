@@ -1,3 +1,5 @@
+/// Fit media into terminal cells, correcting for the cell's physical aspect ratio.
+/// Returns `(0, 0)` if any input dimension is zero. Small images may be enlarged.
 pub fn compute_output_dims(
     iw: u32,
     ih: u32,
@@ -6,34 +8,33 @@ pub fn compute_output_dims(
     cw_px: u32,
     ch_px: u32,
 ) -> (u64, u64) {
-    let cw_px = cw_px.max(1) as f64;
-    let ch_px = ch_px.max(1) as f64;
-    let h_from_w = ((tw as f64 * ih as f64 * cw_px) / (iw as f64 * ch_px))
-        .round()
-        .max(1.0) as u64;
-    if h_from_w <= th {
-        (tw, h_from_w)
+    if iw == 0 || ih == 0 || tw == 0 || th == 0 || cw_px == 0 || ch_px == 0 {
+        return (0, 0);
+    }
+    let ratio = (iw as f64 * ch_px as f64) / (ih as f64 * cw_px as f64);
+    if tw as f64 / th as f64 <= ratio {
+        (
+            tw,
+            (tw as f64 / ratio).round().max(1.0).min(th as f64) as u64,
+        )
     } else {
-        let w_from_h = ((th as f64 * iw as f64 * ch_px) / (ih as f64 * cw_px))
-            .round()
-            .max(1.0)
-            .min(tw as f64) as u64;
-        (w_from_h, th)
+        (
+            (th as f64 * ratio).round().max(1.0).min(tw as f64) as u64,
+            th,
+        )
     }
 }
 
-pub fn render_frame(
-    rgba: &[u8],
-    iw: u32,
-    ih: u32,
-    out_w: u64,
-    out_h: u64,
-    bg: (u8, u8, u8),
-    opaque: bool,
-) -> String {
-    if opaque {
-        crate::render::render_opaque(rgba, iw, ih, out_w, out_h, bg.0, bg.1, bg.2)
-    } else {
-        crate::render::render_alpha(rgba, iw, ih, out_w, out_h, bg.0, bg.1, bg.2)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fits_wide_tall_and_tiny_images() {
+        assert_eq!(compute_output_dims(1920, 1080, 80, 22, 10, 22), (80, 20));
+        assert_eq!(compute_output_dims(100, 1000, 80, 22, 10, 22), (5, 22));
+        assert_eq!(compute_output_dims(1, 1, 80, 22, 10, 22), (48, 22));
+        assert_eq!(compute_output_dims(1, 1, 0, 22, 10, 22), (0, 0));
+        assert_eq!(compute_output_dims(0, 1, 80, 22, 10, 22), (0, 0));
     }
 }
