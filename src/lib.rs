@@ -1,9 +1,11 @@
 //! Image and animation rendering for true-color terminals.
 //!
-//! [`Renderer`] reuses sampling geometry and buffers across frames. Use
-//! [`compute_output_dims`] to preserve the source aspect ratio and [`open_stream`]
-//! to decode GIFs or videos lazily. The library never changes terminal state or
-//! installs signal handlers.
+//! [`Renderer`] draws two vertically stacked pixels per terminal cell using `▀`
+//! with foreground and background colors, reusing sampling geometry and buffers
+//! across frames. Use [`compute_output_dims`] to fit media into whole terminal
+//! cells while preserving its aspect ratio and [`open_stream`] to decode GIFs or
+//! videos lazily. The library never changes terminal state or installs signal
+//! handlers.
 mod color;
 pub mod frames;
 mod media_render;

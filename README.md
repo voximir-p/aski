@@ -14,6 +14,7 @@ library.
 - Download direct **HTTP/HTTPS media URLs** with `--url` / `-u`
 - Play animated **GIFs** natively
 - Play **videos** through ffmpeg with buffered streaming decode
+- Draw two vertically stacked pixels per terminal cell using `▀` and separate foreground/background colors
 - Preserve aspect ratio using terminal cell geometry
 - Blend transparency against a configurable background color
 - Cache rendered ANSI frames for smoother repeat playback
@@ -59,7 +60,7 @@ aski clip.mp4 --no-cache --cell-width 9 --cell-height 20
 
 aski combines a few focused rendering techniques:
 
-- 24-bit ANSI color output using `█`
+- 24-bit ANSI foreground and background colors using `▀` for two pixels per cell
 - area-weighted downsampling instead of nearest-neighbor shortcuts
 - correct handling of non-square terminal cells
 - on-demand frame decode for animated media
@@ -69,6 +70,7 @@ aski combines a few focused rendering techniques:
 
 | Feature                    | What it does                                                                                          |
 |----------------------------|-------------------------------------------------------------------------------------------------------|
+| Two pixels per cell        | Uses `▀` with independent top and bottom colors to double vertical detail within the same terminal area |
 | Aspect-ratio aware scaling | Fits media to the terminal using configurable cell dimensions (`--cell-width`, `--cell-height`)       |
 | Real transparency          | Blends alpha against a configurable background instead of discarding it                               |
 | Fast opaque path           | `--opaque` skips alpha math for images without meaningful transparency                                |
@@ -171,6 +173,9 @@ continues to be treated as a local path.
 | `--cell-width <PX>`  | Terminal cell width hint for aspect correction. Default: `10`  |
 | `--cell-height <PX>` | Terminal cell height hint for aspect correction. Default: `22` |
 
+Both settings describe a whole character cell. Each cell contains two vertically stacked output pixels;
+aski accounts for their half-height internally, so use your font's full cell height for `--cell-height`.
+
 ### Playback options
 
 | Option              | Description                                           |
@@ -240,14 +245,18 @@ Invalid input is rejected rather than silently replaced with the default.
 
 ## How It Works
 
-Each terminal cell becomes one output pixel, drawn using the Unicode full block character `█` and a 24-bit ANSI
-foreground color.
+Each terminal cell holds two vertically stacked output pixels, drawn using the Unicode upper half block `▀`.
+The 24-bit ANSI foreground color fills the top half, and the background color fills the bottom half. An output of
+80 columns by 22 terminal rows therefore samples an 80-by-44 pixel grid, doubling vertical detail within the same area.
 
-For each image or animation frame, aski downsamples the source into terminal cells using area-weighted averaging, which
-produces
-smoother results than simple nearest-neighbor sampling. Fractional pixel coverage is preserved along both axes,
-and images smaller than the terminal are enlarged without leaving empty cells. Channels are averaged in sRGB space.
-The renderer reuses sampling geometry and row buffers and emits a color escape only when the color changes.
+For each image or animation frame, aski fits the source to the terminal using whole-cell dimensions to preserve its
+aspect ratio, then samples each half-cell using area-weighted averaging. Fractional pixel coverage is preserved along
+both axes, and images smaller than the terminal are enlarged without leaving empty cells. Channels are averaged in
+sRGB space. Transparency in each half is blended independently against the color selected by `--background`;
+`--opaque` skips that blending in both halves.
+The renderer reuses sampling geometry and row buffers and emits foreground or background escapes only when that
+color changes. The background resets before each line break to keep scrolling from tinting empty columns;
+both colors are reset at the end of each frame.
 
 For animated media, frames are decoded as a stream and rendered one by one. For looping or precomputed playback, cached
 data is the
@@ -314,6 +323,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+`compute_output_dims` returns terminal columns and rows, and `Renderer::new` accepts those same whole-cell dimensions.
+The renderer samples twice as many vertical pixels as terminal rows and packs each pair into one `▀` character.
+Output width and twice the output height must fit in `u32`.
+
 Reuse a `Renderer` for successive frames with the same dimensions. `render` borrows its output buffer;
 call `.to_owned()` only when retaining a frame. Output uses CRLF between rows, ends in an ANSI reset,
 and has no trailing newline. Invalid geometry and incorrectly sized RGBA buffers return `RenderError`.
@@ -337,10 +350,12 @@ cargo build --locked
 python3 tests/terminal_smoke.py target/debug/aski
 ```
 
-Tests cover sampling against an independent two-dimensional reference, transparency, upscaling,
-color parsing, variable frame timing, CLI failures, GIF playback, video decoder cleanup,
+Tests cover half-cell sampling against an independent two-dimensional reference, independent foreground/background
+colors, transparency in both halves, upscaling, background resets at line breaks, color parsing, variable frame timing,
+CLI failures, GIF playback, video decoder cleanup,
 and URL downloads against a local HTTP server (redirects, content detection, errors, and cancellation).
-The benchmark measures reused rendering buffers at 360p, 1080p, and 4K; it excludes decoding and terminal I/O.
+The benchmark measures reused rendering buffers at 360p, 1080p, and 4K, each rendered into 80-by-22 terminal cells
+(80-by-44 output pixels); it excludes decoding and terminal I/O.
 
 Release builds use the cargo-dist version pinned in `dist-workspace.toml`.
 Windows ARM64 runs on `windows-11-arm` with its native Windows SDK. This avoids

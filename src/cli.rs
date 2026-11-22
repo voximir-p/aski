@@ -9,6 +9,7 @@ use std::path::PathBuf;
 #[command(
     name = "aski",
     about = "Render images, GIFs, and videos in a true-color terminal",
+    long_about = "Render images, GIFs, and videos in a true-color terminal.\nEach ▀ cell shows two vertical pixels: foreground on top, background below.",
     version,
     styles = make_styles(),
     max_term_width = 100,
@@ -42,7 +43,7 @@ pub struct Args {
         value_parser = aski::parse_color,
         help_heading = "Display",
         help = "Background color for transparent areas",
-        long_help = "Color to show behind transparent areas of the image.\nAccepts CSS-like color formats: #15161c, #abc, rgb(21,22,28),\nhsl(235,14%,10%), hwb(), lab(), lch(), oklab(), oklch().\nRGB percentages and hue units (deg, rad, grad, turn) are supported.\nThe background must be opaque. Only transparent source pixels change."
+        long_help = "Color to blend behind transparent pixels in either half of each cell.\nAccepts CSS-like color formats: #15161c, #abc, rgb(21,22,28),\nhsl(235,14%,10%), hwb(), lab(), lch(), oklab(), oklch().\nRGB percentages and hue units (deg, rad, grad, turn) are supported.\nThe background must be opaque. Only transparent source pixels change."
     )]
     pub background: aski::Color,
 
@@ -62,7 +63,7 @@ pub struct Args {
         value_name = "ROWS",
         help_heading = "Display",
         help = "Reserve rows at terminal bottom",
-        long_help = "Keep this many rows below the image. Animated playback uses one\nreserved row for its status line. With --verbose, at least one row\nis reserved when the terminal has room. Set to 0 for maximum image area."
+        long_help = "Keep this many whole terminal rows below the image. Animated playback\nuses one reserved row for its status line. With --verbose, at least one\nrow is reserved when the terminal has room. Set to 0 for maximum image area."
     )]
     pub reserve: u64,
 
@@ -74,7 +75,7 @@ pub struct Args {
         value_name = "PX",
         help_heading = "Scaling",
         help = "Terminal cell width hint in pixels",
-        long_help = "Pixel width of one terminal cell, used to preserve the correct aspect\nratio when mapping image pixels to character cells. The default of 10\nis a starting point. Lower this value if the output looks\nhorizontally squashed; raise it if it looks stretched."
+        long_help = "Pixel width of one whole terminal cell, used to preserve the correct\naspect ratio when mapping image pixels to character cells. The default\nof 10 is a starting point. Lower this value if the output looks\nhorizontally squashed; raise it if it looks stretched."
     )]
     pub cell_width: u32,
 
@@ -85,7 +86,7 @@ pub struct Args {
         value_name = "PX",
         help_heading = "Scaling",
         help = "Terminal cell height hint in pixels",
-        long_help = "Pixel height of one terminal cell, used together with --cell-width\nto preserve aspect ratio. The default of 22 matches most monospace\nfonts. Raise this if the output looks vertically squashed; lower it\nif it looks stretched."
+        long_help = "Pixel height of one whole terminal cell, used with --cell-width\nto preserve aspect ratio. Each ▀ cell contains two vertical pixels;\nthe renderer accounts for their half-height automatically.\nThe default of 22 matches most monospace fonts. Raise this if the\noutput looks vertically squashed; lower it if it looks stretched."
     )]
     pub cell_height: u32,
 

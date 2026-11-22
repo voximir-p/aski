@@ -1,4 +1,6 @@
 /// Fit media into terminal cells, correcting for the cell's physical aspect ratio.
+/// Returns `(columns, rows)` in whole cells; [`crate::Renderer`] samples two
+/// vertical pixels per row. Cell width and height describe a whole character.
 /// Returns `(0, 0)` if any input dimension is zero. Small images may be enlarged.
 pub fn compute_output_dims(
     iw: u32,

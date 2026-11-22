@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Render two vertically stacked pixels per terminal cell using `▀`, with independent 24-bit foreground and background
+  colors, for images, GIFs, and videos.
+- Double vertical sampling while preserving terminal dimensions, aspect ratio, and independent transparency blending
+  in each half-cell. Cell geometry settings and library output dimensions continue to describe whole terminal cells.
+- Update CLI help, runtime dimension labels, README, library documentation, and benchmark output for half-block rendering.
+
 ## [2.0.1] - 2026-10-11
 
 ### Added

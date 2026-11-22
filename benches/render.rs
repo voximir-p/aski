@@ -18,7 +18,7 @@ fn main() {
                 frames += 1;
             }
             println!(
-                "{width}x{height} -> 80x22 | opaque={opaque} | {:.3} ms/frame | {bytes} bytes/frame",
+                "{width}x{height} -> 80x22 cells (80x44 pixels) | opaque={opaque} | {:.3} ms/frame | {bytes} bytes/frame",
                 start.elapsed().as_secs_f64() * 1000.0 / frames as f64
             );
         }

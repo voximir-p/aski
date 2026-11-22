@@ -74,16 +74,19 @@ fn channels<const OPAQUE: bool>(pixel: &[u8]) -> [u64; 4] {
 
 /// Reusable area-filtered RGBA-to-ANSI renderer.
 ///
+/// Each terminal cell uses `▀` with independent 24-bit foreground (top pixel) and
+/// background (bottom pixel) colors, sampling two pixel rows per terminal row.
 /// Sampling geometry, row buffers, and output capacity are reused between frames.
 /// Alpha is composited against `background` before averaging, avoiding halos from
 /// the RGB channels of transparent pixels. Colors are averaged in sRGB space.
-/// Rows are separated by CRLF, with no trailing newline; output ends in an ANSI reset.
+/// The background resets before each CRLF to keep scrolling from tinting empty
+/// cells. There is no trailing newline; output ends in a full ANSI reset.
 ///
 /// ```
 /// use aski::Renderer;
 /// let mut renderer = Renderer::new(1, 1, 2, 1, (0, 0, 0), false)?;
 /// let ansi = renderer.render(&[255, 0, 0, 255])?;
-/// assert!(ansi.contains("██"));
+/// assert!(ansi.contains("▀▀"));
 /// # Ok::<(), aski::RenderError>(())
 /// ```
 pub struct Renderer {
@@ -93,14 +96,16 @@ pub struct Renderer {
     vertical: Vec<Span>,
     row: Vec<[f64; 3]>,
     sums: Vec<[f64; 3]>,
+    top_row: Vec<[u8; 3]>,
     background: (u8, u8, u8),
     opaque: bool,
     output: String,
 }
 
 impl Renderer {
-    /// Construct a renderer. All dimensions must be nonzero, and output
-    /// dimensions must fit in `u32`. Invalid or overflowing sizes return an error.
+    /// Construct a renderer with output dimensions in terminal columns and rows.
+    /// All dimensions must be nonzero; output width and twice the output height
+    /// must fit in `u32`. Invalid or overflowing sizes return an error.
     pub fn new(
         width: u32,
         height: u32,
@@ -116,6 +121,9 @@ impl Renderer {
         if width == 0 || height == 0 || ow == 0 || oh == 0 {
             return Err(RenderError("Image and output dimensions must be nonzero"));
         }
+        let pixel_height = oh
+            .checked_mul(2)
+            .ok_or(RenderError("Output height is too large"))?;
         let input_len = (width as usize)
             .checked_mul(height as usize)
             .and_then(|n| n.checked_mul(4))
@@ -123,10 +131,11 @@ impl Renderer {
             .ok_or(RenderError("Image dimensions are too large"))?;
         let capacity = (ow as usize)
             .checked_mul(oh as usize)
-            .and_then(|n| n.checked_mul(24))
+            // Two 19-byte color escapes and one three-byte half block per cell.
+            .and_then(|n| n.checked_mul(41))
             .and_then(|n| {
                 (oh as usize)
-                    .checked_mul(6)
+                    .checked_mul(7)
                     .and_then(|rows| n.checked_add(rows))
             })
             .ok_or(RenderError("Output dimensions are too large"))?;
@@ -138,9 +147,10 @@ impl Renderer {
             width: width as usize,
             input_len,
             horizontal: spans(width, ow)?,
-            vertical: spans(height, oh)?,
+            vertical: spans(height, pixel_height)?,
             row: vec![[0.0; 3]; ow as usize],
             sums: vec![[0.0; 3]; ow as usize],
+            top_row: vec![[0; 3]; ow as usize],
             background,
             opaque,
             output,
@@ -171,7 +181,8 @@ impl Renderer {
             self.background.2 as f64,
         ];
         let mut cached_row = None;
-        let mut previous_color = None;
+        let mut previous_foreground = None;
+        let mut previous_background = None;
         for (y, vertical) in self.vertical.iter().enumerate() {
             self.sums.fill([0.0; 3]);
             for sy in vertical.start..vertical.end {
@@ -218,20 +229,33 @@ impl Renderer {
                     }
                 }
             }
-            if y > 0 {
-                self.output.push_str("\r\n");
+            if y % 2 == 0 {
+                for (top, pixel) in self.top_row.iter_mut().zip(&self.sums) {
+                    *top = pixel.map(|v| v.round().clamp(0.0, 255.0) as u8);
+                }
+                continue;
             }
-            for pixel in &self.sums {
-                let color = pixel.map(|v| v.round().clamp(0.0, 255.0) as u8);
-                if previous_color != Some(color) {
+            if y > 1 {
+                // Scrolling terminals can fill a new line with the current
+                // background, including columns outside the rendered image.
+                self.output.push_str("\x1b[49m\r\n");
+                previous_background = None;
+            }
+            for (&top, pixel) in self.top_row.iter().zip(&self.sums) {
+                let bottom = pixel.map(|v| v.round().clamp(0.0, 255.0) as u8);
+                if previous_foreground != Some(top) {
+                    let _ = write!(self.output, "\x1b[38;2;{};{};{}m", top[0], top[1], top[2]);
+                    previous_foreground = Some(top);
+                }
+                if previous_background != Some(bottom) {
                     let _ = write!(
                         self.output,
-                        "\x1b[38;2;{};{};{}m",
-                        color[0], color[1], color[2]
+                        "\x1b[48;2;{};{};{}m",
+                        bottom[0], bottom[1], bottom[2]
                     );
-                    previous_color = Some(color);
+                    previous_background = Some(bottom);
                 }
-                self.output.push('█');
+                self.output.push('▀');
             }
         }
         self.output.push_str("\x1b[0m");
@@ -249,7 +273,7 @@ mod tests {
             renderer
                 .render(&[0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255])
                 .unwrap(),
-            "\x1b[38;2;85;85;85m██\x1b[0m"
+            "\x1b[38;2;85;85;85m\x1b[48;2;85;85;85m▀▀\x1b[0m"
         );
     }
 
@@ -259,12 +283,44 @@ mod tests {
         let mut alpha = Renderer::new(2, 1, 1, 1, (0, 0, 255), false).unwrap();
         assert_eq!(
             alpha.render(&pixels).unwrap(),
-            "\x1b[38;2;128;0;128m█\x1b[0m"
+            "\x1b[38;2;128;0;128m\x1b[48;2;128;0;128m▀\x1b[0m"
         );
         let mut opaque = Renderer::new(2, 1, 1, 1, (0, 0, 255), true).unwrap();
         assert_eq!(
             opaque.render(&pixels).unwrap(),
-            "\x1b[38;2;128;128;0m█\x1b[0m"
+            "\x1b[38;2;128;128;0m\x1b[48;2;128;128;0m▀\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn each_half_blends_transparency_independently() {
+        let pixels = [255, 0, 0, 128, 0, 255, 0, 0];
+        let mut alpha = Renderer::new(1, 2, 1, 1, (0, 0, 255), false).unwrap();
+        assert_eq!(
+            alpha.render(&pixels).unwrap(),
+            "\x1b[38;2;128;0;127m\x1b[48;2;0;0;255m▀\x1b[0m"
+        );
+        let mut opaque = Renderer::new(1, 2, 1, 1, (0, 0, 255), true).unwrap();
+        assert_eq!(
+            opaque.render(&pixels).unwrap(),
+            "\x1b[38;2;255;0;0m\x1b[48;2;0;255;0m▀\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn foreground_and_background_changes_are_tracked_independently() {
+        let red = [255, 0, 0, 255];
+        let blue = [0, 0, 255, 255];
+        let green = [0, 255, 0, 255];
+        let yellow = [255, 255, 0, 255];
+        let pixels = [red, red, yellow, blue, green, green].concat();
+        let mut renderer = Renderer::new(3, 2, 3, 1, (0, 0, 0), true).unwrap();
+        assert_eq!(
+            renderer.render(&pixels).unwrap(),
+            concat!(
+                "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255m▀\x1b[48;2;0;255;0m▀",
+                "\x1b[38;2;255;255;0m▀\x1b[0m"
+            )
         );
     }
 
@@ -273,11 +329,11 @@ mod tests {
         let mut renderer = Renderer::new(1, 1, 3, 2, (0, 0, 0), false).unwrap();
         assert_eq!(
             renderer.render(&[255, 0, 0, 255]).unwrap(),
-            "\x1b[38;2;255;0;0m███\r\n███\x1b[0m"
+            "\x1b[38;2;255;0;0m\x1b[48;2;255;0;0m▀▀▀\x1b[49m\r\n\x1b[48;2;255;0;0m▀▀▀\x1b[0m"
         );
         assert_eq!(
             renderer.render(&[0, 255, 0, 255]).unwrap(),
-            "\x1b[38;2;0;255;0m███\r\n███\x1b[0m"
+            "\x1b[38;2;0;255;0m\x1b[48;2;0;255;0m▀▀▀\x1b[49m\r\n\x1b[48;2;0;255;0m▀▀▀\x1b[0m"
         );
     }
 
@@ -285,6 +341,9 @@ mod tests {
     fn invalid_dimensions_and_buffers_return_errors() {
         assert!(Renderer::new(0, 1, 1, 1, (0, 0, 0), false).is_err());
         assert!(Renderer::new(1, 1, u64::MAX, 1, (0, 0, 0), false).is_err());
+        assert!(Renderer::new(1, 1, 1, 0, (0, 0, 0), false).is_err());
+        assert!(Renderer::new(1, 1, 1, u64::MAX, (0, 0, 0), false).is_err());
+        assert!(Renderer::new(1, 1, 1, u64::from(u32::MAX / 2) + 1, (0, 0, 0), false).is_err());
         assert!(Renderer::new(u32::MAX, u32::MAX, 1, 1, (0, 0, 0), false).is_err());
         assert!(
             Renderer::new(1, 1, 1, 1, (0, 0, 0), false)
@@ -293,28 +352,50 @@ mod tests {
                 .is_err()
         );
     }
+
     fn ansi_pixels(mut ansi: &str) -> Vec<[u8; 3]> {
-        let mut color = [0; 3];
+        let mut foreground = None;
+        let mut background = None;
+        let mut top_row = Vec::new();
+        let mut bottom_row = Vec::new();
         let mut pixels = Vec::new();
         while !ansi.is_empty() {
-            if let Some(rest) = ansi.strip_prefix("\x1b[38;2;") {
-                let (rgb, rest) = rest.split_once('m').unwrap();
-                color = rgb
-                    .split(';')
-                    .map(|s| s.parse().unwrap())
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap();
+            if let Some(rest) = ansi.strip_prefix("\x1b[") {
+                let (params, rest) = rest.split_once('m').unwrap();
+                if params == "0" {
+                    foreground = None;
+                    background = None;
+                } else if params == "49" {
+                    background = None;
+                } else {
+                    let (mode, rgb) = params.split_once(";2;").unwrap();
+                    let color = rgb
+                        .split(';')
+                        .map(|s| s.parse().unwrap())
+                        .collect::<Vec<_>>()
+                        .try_into()
+                        .unwrap();
+                    match mode {
+                        "38" => foreground = Some(color),
+                        "48" => background = Some(color),
+                        _ => panic!("Unexpected color mode: {mode}"),
+                    }
+                }
                 ansi = rest;
-            } else if let Some(rest) = ansi.strip_prefix('█') {
-                pixels.push(color);
+            } else if let Some(rest) = ansi.strip_prefix('▀') {
+                top_row.push(foreground.unwrap());
+                bottom_row.push(background.unwrap());
                 ansi = rest;
-            } else if let Some(rest) = ansi.strip_prefix("\x1b[0m") {
+            } else if let Some(rest) = ansi.strip_prefix("\r\n") {
+                pixels.append(&mut top_row);
+                pixels.append(&mut bottom_row);
                 ansi = rest;
             } else {
-                ansi = &ansi[1..];
+                panic!("Unexpected ANSI output: {ansi:?}");
             }
         }
+        pixels.append(&mut top_row);
+        pixels.append(&mut bottom_row);
         pixels
     }
 
@@ -333,13 +414,14 @@ mod tests {
                             let mut renderer =
                                 Renderer::new(iw, ih, ow, oh, (21, 22, 28), opaque).unwrap();
                             let actual = ansi_pixels(renderer.render(&pixels).unwrap());
-                            assert_eq!(actual.len(), (ow * oh) as usize);
-                            for y in 0..oh {
+                            let pixel_height = oh * 2;
+                            assert_eq!(actual.len(), (ow * pixel_height) as usize);
+                            for y in 0..pixel_height {
                                 for x in 0..ow {
                                     let left = x as f64 * iw as f64 / ow as f64;
                                     let right = (x + 1) as f64 * iw as f64 / ow as f64;
-                                    let top = y as f64 * ih as f64 / oh as f64;
-                                    let bottom = (y + 1) as f64 * ih as f64 / oh as f64;
+                                    let top = y as f64 * ih as f64 / pixel_height as f64;
+                                    let bottom = (y + 1) as f64 * ih as f64 / pixel_height as f64;
                                     let mut expected = [0.0; 3];
                                     for sy in 0..ih {
                                         for sx in 0..iw {

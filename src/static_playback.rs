@@ -12,7 +12,7 @@ pub fn render_static(args: &cli::Args) -> io::Result<()> {
     let rch = ch.saturating_sub(args.reserve).max(1);
     let (out_w, out_h) = compute_output_dims(iw, ih, cw, rch, args.cell_width, args.cell_height);
     if args.verbose {
-        eprintln!("Image: {iw}x{ih}px | terminal: {cw}x{ch} | output: {out_w}x{out_h}");
+        eprintln!("Image: {iw}x{ih}px | terminal: {cw}x{ch} | output: {out_w}x{out_h} cells");
     }
     let mut renderer = Renderer::new(iw, ih, out_w, out_h, args.background, args.opaque)
         .map_err(io::Error::other)?;

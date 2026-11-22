@@ -59,8 +59,30 @@ fn tiny_static_images_render_with_final_newline() {
     );
     let output = String::from_utf8(result.stdout).unwrap();
     assert!(output.contains("\x1b[38;2;255;0;0m"));
+    assert!(output.contains("\x1b[48;2;255;0;0m"));
     assert!(output.ends_with("\x1b[0m\n"));
-    assert!(output.matches('█').count() > 1);
+    assert!(output.matches('▀').count() > 1);
+    assert!(!output.contains('█'));
+}
+
+#[test]
+fn two_source_rows_share_one_terminal_cell() {
+    let file = Fixture::new("png");
+    image::RgbaImage::from_raw(1, 2, vec![255, 0, 0, 255, 0, 0, 255, 255])
+        .unwrap()
+        .save(&file.0)
+        .unwrap();
+    // Reserving all available rows leaves one terminal row for the image.
+    let result = file.run(&["--reserve", &u64::MAX.to_string()]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(result.stdout).unwrap(),
+        "\x1b[38;2;255;0;0m\x1b[48;2;0;0;255m▀\x1b[0m\n"
+    );
 }
 
 #[test]
@@ -98,6 +120,10 @@ fn gif_streaming_precompute_and_no_cache_show_each_frame_once() {
         let output = String::from_utf8(result.stdout).unwrap();
         assert_eq!(output.matches("\x1b[38;2;255;0;0m").count(), 1);
         assert_eq!(output.matches("\x1b[38;2;0;0;255m").count(), 1);
+        assert!(output.contains("\x1b[48;2;255;0;0m"));
+        assert!(output.contains("\x1b[48;2;0;0;255m"));
+        assert!(output.contains('▀'));
+        assert!(!output.contains('█'));
     }
 }
 
