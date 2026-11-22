@@ -1,4 +1,4 @@
-use std::fmt::{self, Write as _};
+use std::fmt;
 
 /// Invalid geometry, pixel data, or an output allocation that is too large.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +70,38 @@ fn channels<const OPAQUE: bool>(pixel: &[u8]) -> [u64; 4] {
             alpha,
         ]
     }
+}
+
+fn sum_channels<const OPAQUE: bool>(pixels: &[[u8; 4]]) -> [u64; 4] {
+    let mut sum = [0_u64; 4];
+    // At most 255 * 255 per channel per pixel, so 65,536 pixels fit in
+    // u32 lanes. Widen between chunks to support arbitrarily wide images.
+    for chunk in pixels.chunks(65_536) {
+        let mut partial = [0_u32; 4];
+        for pixel in chunk {
+            let alpha = if OPAQUE { 1 } else { u32::from(pixel[3]) };
+            partial[0] += u32::from(pixel[0]) * alpha;
+            partial[1] += u32::from(pixel[1]) * alpha;
+            partial[2] += u32::from(pixel[2]) * alpha;
+            if !OPAQUE {
+                partial[3] += alpha;
+            }
+        }
+        for (sum, partial) in sum.iter_mut().zip(partial) {
+            *sum += u64::from(partial);
+        }
+    }
+    sum
+}
+
+fn write_color(output: &mut String, background: bool, color: [u8; 3]) {
+    output.push_str(if background { "\x1b[48;2" } else { "\x1b[38;2" });
+    let mut digits = itoa::Buffer::new();
+    for channel in color {
+        output.push(';');
+        output.push_str(digits.format(channel));
+    }
+    output.push('m');
 }
 
 /// Reusable area-filtered RGBA-to-ANSI renderer.
@@ -197,16 +229,11 @@ impl Renderer {
                         if span.end > span.start + 1 {
                             let last =
                                 channels::<OPAQUE>(&pixels[(span.end - 1) * 4..span.end * 4]);
-                            let mut interior = [0_u64; 4];
-                            for pixel in pixels[(span.start + 1) * 4..(span.end - 1) * 4]
-                                .as_chunks::<4>()
-                                .0
-                            {
-                                let value = channels::<OPAQUE>(pixel);
-                                for channel in 0..4 {
-                                    interior[channel] += value[channel];
-                                }
-                            }
+                            let interior = sum_channels::<OPAQUE>(
+                                pixels[(span.start + 1) * 4..(span.end - 1) * 4]
+                                    .as_chunks::<4>()
+                                    .0,
+                            );
                             for channel in 0..4 {
                                 weighted[channel] += last[channel] as f64 * span.last
                                     + interior[channel] as f64 * span.interior;
@@ -244,15 +271,11 @@ impl Renderer {
             for (&top, pixel) in self.top_row.iter().zip(&self.sums) {
                 let bottom = pixel.map(|v| v.round().clamp(0.0, 255.0) as u8);
                 if previous_foreground != Some(top) {
-                    let _ = write!(self.output, "\x1b[38;2;{};{};{}m", top[0], top[1], top[2]);
+                    write_color(&mut self.output, false, top);
                     previous_foreground = Some(top);
                 }
                 if previous_background != Some(bottom) {
-                    let _ = write!(
-                        self.output,
-                        "\x1b[48;2;{};{};{}m",
-                        bottom[0], bottom[1], bottom[2]
-                    );
+                    write_color(&mut self.output, true, bottom);
                     previous_background = Some(bottom);
                 }
                 self.output.push('▀');
@@ -275,6 +298,19 @@ mod tests {
                 .unwrap(),
             "\x1b[38;2;85;85;85m\x1b[48;2;85;85;85m▀▀\x1b[0m"
         );
+    }
+
+    #[test]
+    fn wide_images_do_not_overflow_accumulators() {
+        let width = 70_003;
+        let pixels = vec![255; width as usize * 4];
+        for opaque in [false, true] {
+            let mut renderer = Renderer::new(width, 1, 1, 1, (0, 0, 0), opaque).unwrap();
+            assert_eq!(
+                renderer.render(&pixels).unwrap(),
+                "\x1b[38;2;255;255;255m\x1b[48;2;255;255;255m▀\x1b[0m"
+            );
+        }
     }
 
     #[test]

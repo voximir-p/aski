@@ -67,6 +67,72 @@ def check(binary, media, args, expected):
         os.close(master)
 
 
+def check_probe_cancellation(binary, media, directory):
+    probe = Path(directory) / "ffprobe"
+    pid_file = Path(directory) / "probe.pid"
+    probe.write_text(
+        '#!/bin/sh\nprintf "%s" "$$" > "$ASKI_TEST_PROBE_PID"\nexec /bin/sleep 60\n'
+    )
+    probe.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": str(directory) + os.pathsep + os.environ.get("PATH", ""),
+        "ASKI_TEST_PROBE_PID": str(pid_file),
+    }
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [binary, str(media), "--verbose"], env=environment,
+        stdin=subprocess.DEVNULL, stdout=slave, stderr=slave,
+    )
+    os.close(slave)
+    probe_pid = None
+    try:
+        deadline = time.monotonic() + 5
+        while probe_pid is None:
+            if pid_file.exists() and (pid := pid_file.read_text().strip()):
+                probe_pid = int(pid)
+            else:
+                assert time.monotonic() < deadline, "Video probe did not start"
+                time.sleep(0.01)
+        process.send_signal(signal.SIGINT)
+        output = read_until(master, process, b"Playback finished:", timeout=2)
+        assert process.wait(timeout=2) == 0
+        assert output.index(b"\x1b[?1049l") < output.index(b"Playback finished:")
+        try:
+            os.kill(probe_pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("Cancelled ffprobe process was not reaped")
+        print("PASS: Ctrl+C cancels a stalled probe and restores the terminal")
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        if probe_pid is not None:
+            try:
+                os.kill(probe_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        os.close(master)
+
+    # A probe can write more than a pipe buffer before exiting. Capturing that
+    # output must not deadlock while waiting for the process to finish.
+    probe.write_text(
+        "#!/bin/sh\ni=0\nwhile [ $i -lt 10000 ]; do\n"
+        "  printf 'probe diagnostic output\\n' >&2\n  i=$((i + 1))\ndone\n"
+        "printf 'probe failure marker\\n' >&2\nexit 7\n"
+    )
+    result = subprocess.run(
+        [binary, str(media)], env=environment,
+        capture_output=True, timeout=5,
+    )
+    assert result.returncode != 0
+    assert b"ffprobe failed:" in result.stderr
+    assert b"probe failure marker" in result.stderr
+    print("PASS: large probe diagnostics are captured without blocking")
+
+
 def main():
     binary = str(Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/aski").resolve())
     with tempfile.TemporaryDirectory(prefix="aski-terminal-") as directory:
@@ -78,6 +144,7 @@ def main():
         check(binary, media, ["--loop", "--precompute"], b"CACHE")
         check(binary, media, ["--loop", "--no-cache", "--prefetch", "0"], b"PLAY")
         check(binary, media, ["--loop", "--fps-limit", "1"], b"PLAY")
+        check_probe_cancellation(binary, media, directory)
         broken = Path(directory) / "broken.gif"
         broken.write_bytes(b"not a GIF")
         master, slave = pty.openpty()

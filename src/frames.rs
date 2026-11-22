@@ -1,4 +1,5 @@
-use std::io::Read;
+use std::fs::File;
+use std::io::{self, Read, Seek};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -71,8 +72,9 @@ pub fn open_stream(
 }
 
 /// Open a stream with cooperative cancellation. Set `cancelled` to true to stop
-/// waiting for video frames. Dropping the stream kills and reaps ffmpeg and joins
-/// the decoder worker, including when its bounded queue is full.
+/// probing a video, waiting for video frames, or decoding further GIF frames.
+/// Dropping the stream kills and reaps ffmpeg and joins the decoder worker,
+/// including when its bounded queue is full.
 pub fn open_stream_with_cancel(
     path: &Path,
     media_type: &MediaType,
@@ -83,18 +85,32 @@ pub fn open_stream_with_cancel(
         return Ok(Box::new(std::iter::empty()));
     }
     match media_type {
-        MediaType::Gif => open_gif_stream(path),
-        MediaType::Video => open_video_stream(path, prefetch, cancelled),
+        MediaType::Gif => open_gif_stream(path).map(|stream| frame_stream(stream, cancelled)),
+        MediaType::Video => open_video_stream(path, prefetch, Arc::clone(&cancelled))
+            .map(|stream| frame_stream(stream.into_iter().flatten(), cancelled)),
         MediaType::Static => Err("Static images must be opened with an image decoder".into()),
     }
-    .map(|stream| Box::new(stream.map(|frame| frame.map_err(DecodeError))) as FrameStream)
     .map_err(DecodeError)
 }
 
-fn open_gif_stream(path: &Path) -> Result<Box<dyn Iterator<Item = Result<Frame, String>>>, String> {
+fn frame_stream(
+    mut stream: impl Iterator<Item = Result<Frame, String>> + 'static,
+    cancelled: Arc<AtomicBool>,
+) -> FrameStream {
+    Box::new(std::iter::from_fn(move || {
+        if cancelled.load(Ordering::Relaxed) {
+            None
+        } else {
+            stream.next().map(|frame| frame.map_err(DecodeError))
+        }
+    }))
+}
+
+fn open_gif_stream(
+    path: &Path,
+) -> Result<impl Iterator<Item = Result<Frame, String>> + 'static, String> {
     use image::AnimationDecoder;
     use image::codecs::gif::GifDecoder;
-    use std::fs::File;
     use std::io::BufReader;
 
     let file =
@@ -116,7 +132,7 @@ fn open_gif_stream(path: &Path) -> Result<Box<dyn Iterator<Item = Result<Frame, 
         })
     });
 
-    Ok(Box::new(iter))
+    Ok(iter)
 }
 
 /// Owns both the process and worker so cancellation does not leak either.
@@ -180,11 +196,77 @@ fn video_info(info: &str) -> Result<(u32, u32, Duration), String> {
     Ok((width, height, delay))
 }
 
+struct ProbeProcess(Child);
+
+impl Drop for ProbeProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn probe_output(file: &mut File) -> io::Result<String> {
+    file.rewind()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn probe_video(
+    path: &Path,
+    cancelled: &AtomicBool,
+) -> Result<Option<(u32, u32, Duration)>, String> {
+    // File-backed capture cannot fill a pipe and block the child while we poll
+    // for cancellation. The files are removed automatically on every exit path.
+    let capture_error = |e| format!("Failed to capture ffprobe output: {e}");
+    let mut stdout = tempfile::tempfile().map_err(capture_error)?;
+    let mut stderr = tempfile::tempfile().map_err(capture_error)?;
+    let mut probe = ProbeProcess(
+        Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height,avg_frame_rate,r_frame_rate",
+                "-of",
+                "default=noprint_wrappers=1",
+            ])
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(stdout.try_clone().map_err(capture_error)?)
+            .stderr(stderr.try_clone().map_err(capture_error)?)
+            .spawn()
+            .map_err(|e| format!("Failed to start ffprobe (install ffmpeg to play videos): {e}"))?,
+    );
+    let status = loop {
+        if cancelled.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        if let Some(status) = probe
+            .0
+            .try_wait()
+            .map_err(|e| format!("Failed to wait for ffprobe: {e}"))?
+        {
+            break status;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    if !status.success() {
+        return Err(format!(
+            "ffprobe failed: {}",
+            probe_output(&mut stderr).map_err(capture_error)?.trim()
+        ));
+    }
+    video_info(&probe_output(&mut stdout).map_err(capture_error)?).map(Some)
+}
+
 fn open_video_stream(
     path: &Path,
     prefetch: usize,
     cancelled: Arc<AtomicBool>,
-) -> Result<Box<dyn Iterator<Item = Result<Frame, String>>>, String> {
+) -> Result<Option<VideoFrameStream>, String> {
     if prefetch > MAX_PREFETCH {
         return Err(format!("Prefetch must be between 0 and {MAX_PREFETCH}"));
     }
@@ -192,27 +274,9 @@ fn open_video_stream(
     let path = path
         .canonicalize()
         .map_err(|e| format!("Failed to open '{}': {e}", path.display()))?;
-    let probe = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height,avg_frame_rate,r_frame_rate",
-            "-of",
-            "default=noprint_wrappers=1",
-        ])
-        .arg(&path)
-        .output()
-        .map_err(|e| format!("Failed to start ffprobe (install ffmpeg to play videos): {e}"))?;
-    if !probe.status.success() {
-        return Err(format!(
-            "ffprobe failed: {}",
-            String::from_utf8_lossy(&probe.stderr).trim()
-        ));
-    }
-    let (width, height, delay) = video_info(&String::from_utf8_lossy(&probe.stdout))?;
+    let Some((width, height, delay)) = probe_video(&path, &cancelled)? else {
+        return Ok(None);
+    };
     let frame_size = (width as usize)
         .checked_mul(height as usize)
         .and_then(|v| v.checked_mul(4))
@@ -320,7 +384,7 @@ fn open_video_stream(
         let _ = child.kill();
         let _ = child.wait();
     });
-    Ok(Box::new(VideoFrameStream {
+    Ok(Some(VideoFrameStream {
         rx: Some(rx),
         child,
         worker: Some(worker),

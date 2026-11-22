@@ -4,11 +4,19 @@
 
 ### Changed
 
+- Speed up rendering with bounded 32-bit pixel accumulation and stack-buffer formatting of ANSI color values,
+  preserving the existing area filter and output colors.
+- Remove redundant iterator boxing from GIF and video streams, and honor cancellation between GIF frames.
 - Render two vertically stacked pixels per terminal cell using `▀`, with independent 24-bit foreground and background
   colors, for images, GIFs, and videos.
 - Double vertical sampling while preserving terminal dimensions, aspect ratio, and independent transparency blending
   in each half-cell. Cell geometry settings and library output dimensions continue to describe whole terminal cells.
 - Update CLI help, runtime dimension labels, README, library documentation, and benchmark output for half-block rendering.
+
+### Fixed
+
+- Allow Ctrl+C to cancel a stalled `ffprobe` before playback, terminate and reap the probe, and restore the terminal.
+- Capture probe diagnostics without blocking on full output pipes while checking for cancellation.
 
 ## [2.0.1] - 2026-10-11
 

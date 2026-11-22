@@ -96,7 +96,7 @@ pub struct Args {
         long = "loop",
         help_heading = "Playback",
         help = "Loop playback until interrupted",
-        long_help = "Keep playing the animation or video in an infinite loop until\nCtrl+C is pressed. Unless --no-cache is set, later passes reuse\nrendered frames from memory."
+        long_help = "Keep playing the animation or video in an infinite loop until\nCtrl+C is pressed. Ctrl+C also cancels video probing before playback.\nUnless --no-cache is set, later passes reuse rendered frames from memory."
     )]
     pub loop_playback: bool,
 

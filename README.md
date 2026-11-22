@@ -257,6 +257,8 @@ sRGB space. Transparency in each half is blended independently against the color
 The renderer reuses sampling geometry and row buffers and emits foreground or background escapes only when that
 color changes. The background resets before each line break to keep scrolling from tinting empty columns;
 both colors are reset at the end of each frame.
+Interior pixel sums use bounded 32-bit chunks that are combined into 64-bit totals, preserving exact accumulation
+for wide images. ANSI color values are formatted in a reusable stack buffer without general-purpose formatting.
 
 For animated media, frames are decoded as a stream and rendered one by one. For looping or precomputed playback, cached
 data is the
@@ -289,6 +291,7 @@ decoded frame history in memory.
 - One-shot streaming playback does not retain a frame cache
 - Invalid colors and zero cell dimensions are reported as argument errors
 - Video playback requires both `ffmpeg` and `ffprobe`; video has no audio
+- Ctrl+C cancels video probing as well as playback and cleans up the probe process
 - Variable-rate videos currently use their average frame rate; GIFs retain their individual frame delays
 - Video is decoded in its encoded orientation; rotation metadata is not applied
 - Broken output pipes exit quietly, and decode failures return a nonzero exit status
@@ -333,7 +336,9 @@ and has no trailing newline. Invalid geometry and incorrectly sized RGBA buffers
 
 `open_stream(path, &MediaType::Gif, 8)` lazily decodes animation frames. Videos use `MediaType::Video`;
 dropping their stream closes the queue, kills and reaps ffmpeg, and joins the decoder worker.
-`frames::open_stream_with_cancel` accepts an `Arc<AtomicBool>` for cancelling waits for video frames.
+`frames::open_stream_with_cancel` accepts an `Arc<AtomicBool>` for cancelling video probing, waits for video frames,
+and further GIF frame decoding. Cancellation is checked between GIF frames; it does not interrupt a frame already
+being decoded. Cancelling an in-progress probe terminates and reaps `ffprobe` before returning an empty stream.
 Stream errors implement `std::error::Error` and include decoding context.
 
 ## Development
@@ -351,8 +356,9 @@ python3 tests/terminal_smoke.py target/debug/aski
 ```
 
 Tests cover half-cell sampling against an independent two-dimensional reference, independent foreground/background
-colors, transparency in both halves, upscaling, background resets at line breaks, color parsing, variable frame timing,
-CLI failures, GIF playback, video decoder cleanup,
+colors, transparency in both halves, upscaling, wide-image accumulator overflow, background resets at line breaks,
+color parsing, variable frame timing, CLI failures, GIF cancellation, video decoder cleanup, stalled-probe cancellation,
+large probe diagnostics,
 and URL downloads against a local HTTP server (redirects, content detection, errors, and cancellation).
 The benchmark measures reused rendering buffers at 360p, 1080p, and 4K, each rendered into 80-by-22 terminal cells
 (80-by-44 output pixels); it excludes decoding and terminal I/O.

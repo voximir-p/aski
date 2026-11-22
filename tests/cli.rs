@@ -127,6 +127,19 @@ fn gif_streaming_precompute_and_no_cache_show_each_frame_once() {
     }
 }
 
+#[test]
+fn gif_streams_stop_when_cancelled_after_opening() {
+    let file = Fixture::new("gif");
+    gif(&file.0);
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut stream =
+        aski::frames::open_stream_with_cancel(&file.0, &aski::MediaType::Gif, 0, cancelled.clone())
+            .unwrap();
+    assert!(stream.next().unwrap().is_ok());
+    cancelled.store(true, Ordering::Relaxed);
+    assert!(stream.next().is_none());
+}
+
 // Explicitly invoked by CI with ffmpeg installed. Kept separate so the normal
 // test suite also works for library users without external video tools.
 #[test]
