@@ -133,6 +133,44 @@ def check_probe_cancellation(binary, media, directory):
     print("PASS: large probe diagnostics are captured without blocking")
 
 
+def check_live_stdin(binary):
+    master, slave = pty.openpty()
+    resize(slave, 32, 12)
+    process = subprocess.Popen(
+        [binary, "-", "--cell-width", "1", "--cell-height", "2", "--verbose"],
+        stdin=subprocess.PIPE, stdout=slave, stderr=slave,
+    )
+    os.close(slave)
+    try:
+        # Send one YUV4MPEG2 frame at a time. Withhold the next frame and EOF
+        # until the terminal has displayed this one.
+        process.stdin.write(b"YUV4MPEG2 W64 H64 F25:1 Ip A1:1 C420jpeg\n")
+        for luma, columns, rows, expected_cells, rgb in [
+            (16, 32, 12, 20 * 10, b"0;0;0"),
+            (235, 18, 8, 12 * 6, b"255;255;255"),
+        ]:
+            resize(master, columns, rows)
+            process.stdin.write(b"FRAME\n" + bytes([luma]) * 4096 + b"\x80" * 2048)
+            process.stdin.flush()
+            output = read_until(master, process, b"PLAY")
+            assert b"\x1b[38;2;" + rgb + b"m" in output
+            assert output.count("▀".encode()) == expected_cells
+
+        # Leave stdin open and idle. Ctrl+C must interrupt the decoder read.
+        process.send_signal(signal.SIGINT)
+        output = read_until(master, process, b"avg FPS", timeout=2)
+        assert process.wait(timeout=2) == 0
+        assert output.index(b"\x1b[?1049l") < output.index(b"Playback finished:")
+        assert b"2 displayed frames" in output and b"cached: 0" in output
+        print("PASS: stdin displays each frame before EOF, resizes, and cancels while idle")
+    finally:
+        process.stdin.close()
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        os.close(master)
+
+
 def main():
     binary = str(Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/aski").resolve())
     with tempfile.TemporaryDirectory(prefix="aski-terminal-") as directory:
@@ -144,6 +182,7 @@ def main():
         check(binary, media, ["--loop", "--precompute"], b"CACHE")
         check(binary, media, ["--loop", "--no-cache", "--prefetch", "0"], b"PLAY")
         check(binary, media, ["--loop", "--fps-limit", "1"], b"PLAY")
+        check_live_stdin(binary)
         check_probe_cancellation(binary, media, directory)
         broken = Path(directory) / "broken.gif"
         broken.write_bytes(b"not a GIF")

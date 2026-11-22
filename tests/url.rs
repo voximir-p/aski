@@ -209,7 +209,12 @@ fn download_failures_are_clear_and_clean_up_temporary_files() {
 
 #[test]
 fn invalid_url_schemes_fail_and_remote_input_is_opt_in() {
-    for url in ["file:///etc/passwd", "ftp://example.com/a.gif", "not-a-url"] {
+    for url in [
+        "-",
+        "file:///etc/passwd",
+        "ftp://example.com/a.gif",
+        "not-a-url",
+    ] {
         let output = run(&["--url", url]);
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("absolute HTTP or HTTPS URL"));

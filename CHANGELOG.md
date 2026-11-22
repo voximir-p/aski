@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Play piped media with `aski -`. Frames render as they arrive, without a temporary file, prefetch queue, or replay cache.
+  Terminal resizes take effect on the next frame, and Ctrl+C can stop playback while the pipe is idle.
+
 ### Changed
 
 - Speed up rendering with bounded 32-bit pixel accumulation and stack-buffer formatting of ANSI color values,

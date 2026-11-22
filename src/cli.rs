@@ -1,8 +1,6 @@
-#[cfg(test)]
-use clap::CommandFactory;
-use clap::Parser;
 use clap::builder::Styles;
 use clap::builder::styling::{AnsiColor, Color, Style};
+use clap::{CommandFactory, Parser};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -14,14 +12,14 @@ use std::path::PathBuf;
     styles = make_styles(),
     max_term_width = 100,
     arg_required_else_help = true,
-    after_help = "Examples:\n  aski photo.jpg\n  aski --url 'https://example.com/photo.jpg'\n  aski logo.png -b '#1e1e2e'\n  aski animation.gif --loop\n  aski video.mp4 --precompute --loop\n\nUse --help for details. Press Ctrl+C to stop playback.",
-    after_long_help = "Examples:\n  aski photo.jpg                         Render an image\n  aski -u 'https://example.com/clip.gif'  Download and play a GIF\n  aski logo.png -b '#1e1e2e'             Blend transparency\n  aski animation.gif --loop              Replay until Ctrl+C\n  aski video.mp4 --precompute --loop     Prepare frames, then replay\n  aski video.mp4 --no-cache --prefetch 2  Limit buffered frames\n\nPlayback notes:\n  Videos require ffmpeg and ffprobe on PATH. Audio is not played.\n  --fps-limit slows playback; it does not skip frames.\n  --precompute requires caching and cannot be combined with --no-cache.\n  RGB percentages and hue units are accepted in background colors.\n  Use a terminal with 24-bit color support for the best results."
+    after_help = "Examples:\n  aski photo.jpg\n  aski - < clip.mkv\n  aski --url 'https://example.com/photo.jpg'\n  aski logo.png -b '#1e1e2e'\n  aski animation.gif --loop\n  aski video.mp4 --precompute --loop\n\nUse --help for details. Press Ctrl+C to stop playback.",
+    after_long_help = "Examples:\n  aski photo.jpg                         Render an image\n  aski - < clip.mkv                      Play a stream from standard input\n  aski -u 'https://example.com/clip.gif'  Download and play a GIF\n  aski logo.png -b '#1e1e2e'             Blend transparency\n  aski animation.gif --loop              Replay until Ctrl+C\n  aski video.mp4 --precompute --loop     Prepare frames, then replay\n  aski video.mp4 --no-cache --prefetch 2  Limit buffered frames\n\nPlayback notes:\n  Standard input requires ffmpeg. Video files also require ffprobe.\n  Use a file for --loop or --precompute. Standard input plays as frames arrive.\n  Audio is not played. --fps-limit slows playback without skipping frames.\n  --precompute requires caching and cannot be combined with --no-cache.\n  RGB percentages and hue units are accepted in background colors.\n  Use a terminal with 24-bit color support for the best results."
 )]
 pub struct Args {
     #[arg(
         value_name = "MEDIA",
-        help = "Media file to display (HTTP/HTTPS address with --url)",
-        long_help = "Path to the image, GIF, or video file to render in the terminal.\nWith --url, treat this argument as a direct HTTP or HTTPS media URL."
+        help = "Media file, - for standard input, or HTTP/HTTPS address with --url",
+        long_help = "Path to an image, GIF, or video. Use - to play media from standard input\nas frames arrive. With --url, supply a direct HTTP or HTTPS media URL.\nStandard input requires ffmpeg and plays once, with no frame cache."
     )]
     pub image: PathBuf,
 
@@ -128,7 +126,7 @@ pub struct Args {
         value_name = "FRAMES",
         help_heading = "Performance",
         help = "Decoder prefetch buffer size",
-        long_help = "How many video frames the background ffmpeg decoder thread buffers\nahead of the display thread. A larger buffer absorbs decode slowdowns\nand makes playback smoother; a smaller buffer lowers peak RAM and\nreduces the startup delay before the first frame appears.\nAccepts 0 to 1024. Set to 0 for unbuffered delivery.\nHas no effect on GIFs or static images."
+        long_help = "How many video frames the background ffmpeg decoder thread buffers\nahead of the display thread. A larger buffer absorbs decode slowdowns\nand makes playback smoother; a smaller buffer lowers peak RAM and\nreduces the startup delay before the first frame appears.\nAccepts 0 to 1024. Set to 0 for unbuffered delivery.\nApplies to video files, including downloaded videos. Standard input\nalways delivers frames on demand."
     )]
     pub prefetch: usize,
 
@@ -189,8 +187,23 @@ fn make_styles() -> Styles {
         )
 }
 
+impl Args {
+    pub fn reads_stdin(&self) -> bool {
+        !self.url && self.image.as_os_str() == "-"
+    }
+}
+
 pub fn parse_args() -> Args {
-    Args::parse()
+    let args = Args::parse();
+    if args.reads_stdin() && (args.loop_playback || args.precompute) {
+        Args::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "standard input is played once as frames arrive. Use a file or URL for --loop or --precompute.",
+            )
+            .exit();
+    }
+    args
 }
 
 #[cfg(test)]

@@ -13,10 +13,17 @@ fn run() -> io::Result<()> {
     let mut args = cli::parse_args();
     let mut media_type = aski::frames::detect_media_type(&args.image);
     let cancelled = Arc::new(AtomicBool::new(false));
-    if args.url || media_type != aski::MediaType::Static {
+    if args.url || args.reads_stdin() || media_type != aski::MediaType::Static {
         let signal = Arc::clone(&cancelled);
         ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))
             .map_err(io::Error::other)?;
+    }
+    if args.reads_stdin() {
+        return animated_playback::render_animated(
+            &args,
+            animated_playback::Source::Stdin,
+            cancelled,
+        );
     }
     // Keep the temporary file alive until playback and its decoder have finished.
     let _download = if args.url {
@@ -37,7 +44,11 @@ fn run() -> io::Result<()> {
     }
     match media_type {
         aski::MediaType::Static => static_playback::render_static(&args),
-        media_type => animated_playback::render_animated(&args, media_type, cancelled),
+        media_type => animated_playback::render_animated(
+            &args,
+            animated_playback::Source::File(media_type),
+            cancelled,
+        ),
     }
 }
 

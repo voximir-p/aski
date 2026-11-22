@@ -1,9 +1,9 @@
 use std::fs::File;
-use std::io::{self, Read, Seek};
+use std::io::{self, BufRead, BufReader, Read, Seek};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -32,6 +32,7 @@ pub struct Frame {
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
+    /// A zero delay means the decoder already paced delivery to the source timestamps.
     pub delay: Duration,
 }
 
@@ -111,7 +112,6 @@ fn open_gif_stream(
 ) -> Result<impl Iterator<Item = Result<Frame, String>> + 'static, String> {
     use image::AnimationDecoder;
     use image::codecs::gif::GifDecoder;
-    use std::io::BufReader;
 
     let file =
         File::open(path).map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
@@ -138,6 +138,7 @@ fn open_gif_stream(
 /// Owns both the process and worker so cancellation does not leak either.
 struct VideoFrameStream {
     rx: Option<Receiver<Result<Frame, String>>>,
+    request: Option<Sender<()>>,
     child: Arc<Mutex<Child>>,
     worker: Option<JoinHandle<()>>,
     cancelled: Arc<AtomicBool>,
@@ -147,6 +148,12 @@ impl Iterator for VideoFrameStream {
     type Item = Result<Frame, String>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        if let Some(request) = &self.request {
+            request.send(()).ok()?;
+        }
         while !self.cancelled.load(Ordering::Relaxed) {
             match self.rx.as_ref()?.recv_timeout(Duration::from_millis(25)) {
                 Ok(frame) => return Some(frame),
@@ -162,6 +169,7 @@ impl Drop for VideoFrameStream {
     fn drop(&mut self) {
         // Disconnect first: this releases a worker blocked sending to a full queue.
         self.rx.take();
+        self.request.take();
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
         }
@@ -283,7 +291,8 @@ fn open_video_stream(
         .filter(|&n| n <= isize::MAX as usize)
         .ok_or("Video dimensions are too large")?;
 
-    let mut child = Command::new("ffmpeg")
+    let mut command = Command::new("ffmpeg");
+    command
         // Keep raw frame geometry consistent with ffprobe, including rotated files.
         .args(["-nostdin", "-noautorotate", "-i"])
         .arg(&path)
@@ -303,45 +312,106 @@ fn open_video_stream(
             "passthrough",
             "pipe:1",
         ])
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    spawn_video_decoder(command, prefetch, cancelled, move |stdout| {
+        let mut rgba = Vec::new();
+        rgba.try_reserve_exact(frame_size)
+            .map_err(|e| format!("Cannot allocate video frame: {e}"))?;
+        rgba.resize(frame_size, 0);
+        stdout.read_exact(&mut rgba).map_err(|e| {
+            if e.kind() == io::ErrorKind::UnexpectedEof {
+                "ffmpeg returned a truncated RGBA frame".to_owned()
+            } else {
+                format!("Video read error: {e}")
+            }
+        })?;
+        Ok(Frame {
+            rgba,
+            width,
+            height,
+            delay,
+        })
+    })
+    .map(Some)
+}
+
+/// Decode a non-seekable media stream from standard input with ffmpeg.
+/// Frames are delivered at the source timestamps with zero additional delay.
+/// There is no frame queue. Dropping the stream also stops a decoder waiting for input.
+pub fn open_stdin_stream(cancelled: Arc<AtomicBool>) -> Result<FrameStream, DecodeError> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Ok(Box::new(std::iter::empty()));
+    }
+    let mut command = Command::new("ffmpeg");
+    // The same process probes and decodes the pipe. Keep stream analysis short
+    // so small live sources can start even when the producer pauses between frames.
+    command
+        .args(["-v", "error", "-xerror", "-nostdin", "-noautorotate"])
+        .args([
+            "-probesize",
+            "8192",
+            "-analyzeduration",
+            "1",
+            "-fpsprobesize",
+            "0",
+        ])
+        .args([
+            "-thread_type",
+            "slice",
+            "-protocol_whitelist",
+            "pipe",
+            "-i",
+            "pipe:0",
+        ])
+        .args(["-map", "0:v:0", "-an", "-sn", "-dn"])
+        // PAM includes dimensions and alpha in each frame. Apply its source
+        // timestamp before writing the pixels, since PAM carries no timestamp.
+        .args(["-vf", "realtime", "-fps_mode", "passthrough"])
+        .args(["-c:v", "pam", "-pix_fmt", "rgba", "-flush_packets", "1"])
+        .args(["-f", "image2pipe", "pipe:1"])
+        .stdin(Stdio::inherit());
+    let stream = spawn_video_decoder(command, 0, cancelled, |stdout| {
+        let image = image::codecs::pnm::PnmDecoder::new(stdout)
+            .and_then(image::DynamicImage::from_decoder)
+            .map_err(|e| format!("Failed to read frame from ffmpeg: {e}"))?
+            .into_rgba8();
+        let (width, height) = image.dimensions();
+        Ok(Frame {
+            rgba: image.into_raw(),
+            width,
+            height,
+            delay: Duration::ZERO,
+        })
+    })
+    .map_err(DecodeError)?;
+    Ok(Box::new(stream.map(|frame| {
+        frame.map_err(|e| DecodeError(format!("Cannot decode standard input: {e}")))
+    })))
+}
+
+fn spawn_video_decoder(
+    mut command: Command,
+    prefetch: usize,
+    cancelled: Arc<AtomicBool>,
+    mut read_frame: impl FnMut(&mut BufReader<ChildStdout>) -> Result<Frame, String> + Send + 'static,
+) -> Result<VideoFrameStream, String> {
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("Failed to start ffmpeg: {e}"))?;
-    let mut stdout = child.stdout.take().expect("stdout was configured as piped");
+    let mut stdout = BufReader::new(child.stdout.take().expect("stdout was configured as piped"));
     let child = Arc::new(Mutex::new(child));
     let worker_child = Arc::clone(&child);
     let (tx, rx) = sync_channel(prefetch);
+    // A zero-capacity response channel still allows a worker to prepare one
+    // frame ahead. In unbuffered mode, only read a frame when next() requests it.
+    let (request, requests) = (prefetch == 0).then(channel).unzip();
     let worker = std::thread::spawn(move || {
         let mut sent_any = false;
         loop {
-            let mut buf = Vec::new();
-            if let Err(e) = buf.try_reserve_exact(frame_size) {
-                let _ = tx.send(Err(format!("Cannot allocate video frame: {e}")));
-                break;
-            }
-            buf.resize(frame_size, 0);
-            let mut read = 0;
-            let mut read_error = None;
-            while read < frame_size {
-                match stdout.read(&mut buf[read..]) {
-                    Ok(0) => break,
-                    Ok(n) => read += n,
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(e) => {
-                        read_error = Some(format!("Video read error: {e}"));
-                        break;
-                    }
-                }
-            }
-            if let Some(error) = read_error {
-                let _ = tx.send(Err(error));
-                break;
-            }
-            if read != frame_size {
-                if read != 0 {
-                    let _ = tx.send(Err("ffmpeg returned a truncated RGBA frame".into()));
-                } else {
+            match stdout.fill_buf() {
+                Ok([]) => {
                     // Poll without holding the process lock while waiting; Drop
                     // must always be able to kill a decoder during cancellation.
                     let status = loop {
@@ -364,32 +434,39 @@ fn open_video_stream(
                         }
                         _ => {}
                     }
+                    break;
                 }
-                break;
+                Ok(_) => {
+                    if let Some(requests) = &requests
+                        && requests.recv().is_err()
+                    {
+                        break;
+                    }
+                    let frame = read_frame(&mut stdout);
+                    let failed = frame.is_err();
+                    if tx.send(frame).is_err() || failed {
+                        break;
+                    }
+                    sent_any = true;
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("Video read error: {e}")));
+                    break;
+                }
             }
-            if tx
-                .send(Ok(Frame {
-                    rgba: buf,
-                    width,
-                    height,
-                    delay,
-                }))
-                .is_err()
-            {
-                break;
-            }
-            sent_any = true;
         }
         let mut child = worker_child.lock().unwrap();
         let _ = child.kill();
         let _ = child.wait();
     });
-    Ok(Some(VideoFrameStream {
+    Ok(VideoFrameStream {
         rx: Some(rx),
+        request,
         child,
         worker: Some(worker),
         cancelled,
-    }))
+    })
 }
 
 fn frame_delay(rate: &str) -> Option<Duration> {

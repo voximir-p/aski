@@ -10,6 +10,11 @@ use crossterm::{cursor, execute, style, terminal};
 
 use crate::{cli, terminal_utils::console_wh};
 
+pub enum Source {
+    File(MediaType),
+    Stdin,
+}
+
 struct TerminalSession {
     active: bool,
 }
@@ -85,6 +90,9 @@ fn frame_deadline(previous: Option<Instant>, now: Instant, delay: Duration) -> (
 }
 
 fn wait_for_frame(deadline: &mut Option<Instant>, delay: Duration, cancelled: &AtomicBool) -> bool {
+    if delay.is_zero() {
+        return false;
+    }
     let (next, late) = frame_deadline(*deadline, Instant::now(), delay);
     *deadline = Some(next);
     while !cancelled.load(Ordering::Relaxed) {
@@ -111,21 +119,18 @@ fn status_line(stats: &PlaybackStats, delay: Duration, width: u64, verbose: bool
         stats.shown, stats.loop_number
     );
     if verbose {
-        let fps = 1.0 / delay.as_secs_f64();
+        let fps = if delay.is_zero() {
+            format!("{:.1} FPS", stats.fps())
+        } else {
+            format!("{:.1}/{:.1} FPS", stats.fps(), 1.0 / delay.as_secs_f64())
+        };
         let detailed = format!(
-            "{mode}  {}  |  {:.1}/{fps:.1} FPS  |  {:.1}ms render  |  {} rendered / {} cached / {} late  |  Ctrl+C stop",
-            stats.shown,
-            stats.fps(),
-            stats.render_ms,
-            stats.rendered,
-            stats.cached,
-            stats.late
+            "{mode}  {}  |  {fps}  |  {:.1}ms render  |  {} rendered / {} cached / {} late  |  Ctrl+C stop",
+            stats.shown, stats.render_ms, stats.rendered, stats.cached, stats.late
         );
         let compact = format!(
-            "{mode}  {}  |  {:.1}/{fps:.1} FPS  |  {} late  |  Ctrl+C stop",
-            stats.shown,
-            stats.fps(),
-            stats.late
+            "{mode}  {}  |  {fps}  |  {} late  |  Ctrl+C stop",
+            stats.shown, stats.late
         );
         for candidate in [detailed, compact] {
             if candidate.len() <= columns {
@@ -194,7 +199,7 @@ fn present(
 
 pub fn render_animated(
     args: &cli::Args,
-    media_type: MediaType,
+    source: Source,
     cancelled: Arc<AtomicBool>,
 ) -> io::Result<()> {
     let session = TerminalSession::enter()?;
@@ -206,9 +211,8 @@ pub fn render_animated(
     let cache_enabled = !args.no_cache && (args.loop_playback || args.precompute);
 
     'playback: while !cancelled.load(Ordering::Relaxed) {
-        let terminal = console_wh();
+        let mut terminal = console_wh();
         stats.loop_number = completed_loops + 1;
-        let rows = available_rows(args, terminal.1);
         let mut deadline = None;
         if cache_terminal != Some(terminal) {
             cache.clear();
@@ -221,12 +225,15 @@ pub fn render_animated(
             if args.precompute && session.active {
                 show_progress(&mut stdout, terminal.0, 0, 0, Duration::ZERO)?;
             }
-            let stream = frames::open_stream_with_cancel(
-                &args.image,
-                &media_type,
-                args.prefetch,
-                Arc::clone(&cancelled),
-            )
+            let stream = match &source {
+                Source::Stdin => frames::open_stdin_stream(Arc::clone(&cancelled)),
+                Source::File(media_type) => frames::open_stream_with_cancel(
+                    &args.image,
+                    media_type,
+                    args.prefetch,
+                    Arc::clone(&cancelled),
+                ),
+            }
             .map_err(io::Error::other)?;
             let mut renderer = None;
             let mut geometry = None;
@@ -235,17 +242,27 @@ pub fn render_animated(
                 if cancelled.load(Ordering::Relaxed) {
                     break 'playback;
                 }
-                if console_wh() != terminal {
-                    execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
-                    cache.clear();
-                    continue 'playback;
+                let size = console_wh();
+                if size != terminal {
+                    match source {
+                        Source::File(_) => {
+                            execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
+                            cache.clear();
+                            continue 'playback;
+                        }
+                        Source::Stdin => {
+                            // Fit the frame in hand. The pipe cannot be reopened on resize.
+                            terminal = size;
+                            geometry = None;
+                        }
+                    }
                 }
                 let frame = frame.map_err(io::Error::other)?;
                 let (ow, oh) = compute_output_dims(
                     frame.width,
                     frame.height,
                     terminal.0,
-                    rows,
+                    available_rows(args, terminal.1),
                     args.cell_width,
                     args.cell_height,
                 );

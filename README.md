@@ -11,6 +11,7 @@ library.
 ## Overview
 
 - Render static **images** directly in the terminal
+- Play **standard input** as it arrives with `aski -`
 - Download direct **HTTP/HTTPS media URLs** with `--url` / `-u`
 - Play animated **GIFs** natively
 - Play **videos** through ffmpeg with buffered streaming decode
@@ -24,6 +25,7 @@ library.
 
 ```sh
 aski image.png
+aski - < clip.mkv
 aski --url "https://example.com/photo.jpg"
 aski -u "https://example.com/animation.gif" --loop
 aski photo.jpg -b "#1e1e2e"
@@ -82,13 +84,13 @@ aski combines a few focused rendering techniques:
 
 ## Playback Model
 
-aski can play animated GIFs natively and most common video formats through ffmpeg.
+aski decodes GIF files natively and uses ffmpeg for video files and standard input.
 
 | Mode           | Behavior                                                                                                               |
 |----------------|------------------------------------------------------------------------------------------------------------------------|
 | Default        | Decode, render, and display frames on demand. Cache ANSI frames when `--loop` is requested, unless `--no-cache` is set |
-| `--precompute` | Render all frames before playback starts for smoother first-frame playback                                             |
-| `--loop`       | Replay until interrupted with `Ctrl+C`                                                                                 |
+| `--precompute` | Render all frames from a file or URL before playback starts                                                            |
+| `--loop`       | Replay a file or URL until interrupted with `Ctrl+C`                                                                   |
 | `--fps-limit`  | Slow playback below the source frame rate without skipping frames                                                      |
 | `--prefetch`   | Buffer more decoded video frames ahead of display to absorb decode hiccups                                             |
 | `--no-cache`   | Disable ANSI frame caching when memory matters more than repeated-loop efficiency                                      |
@@ -122,7 +124,29 @@ Usage: aski [OPTIONS] <MEDIA>
 
 | Argument  | Description                                                                  |
 |-----------|------------------------------------------------------------------------------|
-| `<MEDIA>` | Path to an image, GIF, or video; with `--url`, a direct HTTP/HTTPS media URL |
+| `<MEDIA>` | A media file path, `-` for standard input, or a direct HTTP/HTTPS address with `--url` |
+
+### Standard input
+
+Use `-` as the media argument to play a pipe or redirected input. For example, this command generates a live test pattern.
+
+```sh
+ffmpeg -v error -f lavfi -i testsrc2=size=320x180:rate=24 -f yuv4mpegpipe - | aski -
+```
+
+One `ffmpeg` process reads stdin, identifies the format, and delivers frames at their stream timestamps.
+aski renders each frame as it arrives and releases it before requesting the next. Playback starts as soon as the
+decoder has enough input and ends at EOF or Ctrl+C. Resizing takes effect on the next frame from the same pipe.
+Standard input uses no media file or frame cache. `--prefetch` applies only to video files, and `--loop` and
+`--precompute` require a file or URL.
+
+Use a format that carries its own headers and can be read sequentially, such as YUV4MPEG2, NUT, or streaming Matroska.
+For headerless pixels, supply the geometry, pixel format, and frame rate to the producer. For example, to play a
+640×480 RGBA capture at 30 FPS, wrap the pixels in NUT as they are read.
+
+```sh
+ffmpeg -v error -f rawvideo -pixel_format rgba -video_size 640x480 -framerate 30 -i frames.rgba -c:v copy -f nut - | aski -
+```
 
 ### URL input
 
@@ -155,8 +179,7 @@ Downloads show progress on stderr in a terminal or with `--verbose`. Ctrl+C canc
 downloading or playback. The temporary file is reused across loops and resizes,
 including with `--no-cache`, and removed on normal exit, errors, or Ctrl+C.
 A connection has 10 seconds to open; a stalled response times out after 30 seconds
-without data. There is no total download duration limit. Without `--url`, `<MEDIA>`
-continues to be treated as a local path.
+without data. There is no total download duration limit. With `--url`, the argument must be an HTTP or HTTPS address.
 
 ### Display options
 
@@ -221,7 +244,7 @@ PREPARING  120 frames  |  3.4 MiB  |  0.8s  |  Ctrl+C stop
 
 Status lines shorten as the terminal narrows. Set `--reserve 0` to maximize image space; `--verbose`
 reserves a status row when possible. In a one-row terminal, the image takes priority.
-Resizing restarts decoding and rebuilds any cached frames for the new dimensions.
+Resizing restarts file playback and rebuilds any cached frames. Standard input continues from its current position.
 Press **Ctrl+C** to stop; the cursor, line wrapping, and original screen are restored before diagnostics appear.
 
 ## Background Color Formats
@@ -272,6 +295,7 @@ decoded frame history in memory.
 | Static images   | Anything supported by the [`image`](https://crates.io/crates/image) crate: PNG, JPEG, WEBP, BMP, TIFF, TGA, and more |
 | Animated images | GIF                                                                                                                  |
 | Video           | MP4, MKV, AVI, MOV, WebM, FLV, WMV, M4V, TS, OGV via [ffmpeg](https://ffmpeg.org/)                                   |
+| Standard input  | FFmpeg inputs readable from a pipe, including encoded images, image sequences, and streamable video containers         |
 
 ## Performance Tuning
 
@@ -290,9 +314,9 @@ decoded frame history in memory.
 - `--fps-limit` extends frame durations; it slows the media rather than dropping frames to preserve its duration
 - One-shot streaming playback does not retain a frame cache
 - Invalid colors and zero cell dimensions are reported as argument errors
-- Video playback requires both `ffmpeg` and `ffprobe`; video has no audio
+- Video files require `ffmpeg` and `ffprobe`. Standard input requires only `ffmpeg`. Playback is silent
 - Ctrl+C cancels video probing as well as playback and cleans up the probe process
-- Variable-rate videos currently use their average frame rate; GIFs retain their individual frame delays
+- Video files use their average frame rate. GIF files and standard input follow frame timing
 - Video is decoded in its encoded orientation; rotation metadata is not applied
 - Broken output pipes exit quietly, and decode failures return a nonzero exit status
 
@@ -300,7 +324,8 @@ decoded frame history in memory.
 
 | Symptom                                          | What to check                                                                                                                        |
 |--------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
-| `Failed to start ffprobe` or `ffmpeg`            | Install ffmpeg and make both executables available on `PATH`. Static images and GIFs do not need them.                               |
+| `Failed to start ffprobe` or `ffmpeg`            | Put `ffmpeg` on `PATH` for standard input. Video files also require `ffprobe`. Static image files and GIF files use built-in decoders. |
+| A video plays from a file but fails from a pipe | Use a streaming container or open the file by path. Some containers need to seek back to earlier data.                               |
 | Escape codes appear as text or colors look wrong | Use a terminal that supports ANSI escape sequences and 24-bit color. Output redirected to a file still contains ANSI codes.          |
 | Image looks stretched                            | Adjust the cell dimensions to match your font. Lower `--cell-width` for horizontally squashed output; raise it for stretched output. |
 | High memory use when looping                     | Use `--no-cache` and reduce `--prefetch`. Precomputing stores every rendered frame.                                                  |
@@ -341,6 +366,9 @@ and further GIF frame decoding. Cancellation is checked between GIF frames; it d
 being decoded. Cancelling an in-progress probe terminates and reaps `ffprobe` before returning an empty stream.
 Stream errors implement `std::error::Error` and include decoding context.
 
+`frames::open_stdin_stream(cancelled)` reads the process's standard input once. Each frame has a zero delay because
+FFmpeg already paces delivery. Use the same cancellation flag to interrupt a wait on an idle pipe.
+
 ## Development
 
 ```sh
@@ -350,7 +378,7 @@ cargo test --locked
 # Requires ffmpeg and ffprobe:
 cargo test --locked --test cli --test url -- --include-ignored
 cargo bench --bench render
-# Unix terminal resize, Ctrl+C, and restoration checks (requires ffmpeg):
+# Unix terminal resize, live stdin, Ctrl+C, and restoration checks (requires ffmpeg):
 cargo build --locked
 python3 tests/terminal_smoke.py target/debug/aski
 ```

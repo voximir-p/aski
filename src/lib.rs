@@ -4,8 +4,8 @@
 //! with foreground and background colors, reusing sampling geometry and buffers
 //! across frames. Use [`compute_output_dims`] to fit media into whole terminal
 //! cells while preserving its aspect ratio and [`open_stream`] to decode GIFs or
-//! videos lazily. The library never changes terminal state or installs signal
-//! handlers.
+//! videos lazily. [`frames::open_stdin_stream`] decodes piped media as it arrives.
+//! The library never changes terminal state or installs signal handlers.
 mod color;
 pub mod frames;
 mod media_render;

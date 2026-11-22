@@ -86,6 +86,55 @@ fn two_source_rows_share_one_terminal_cell() {
 }
 
 #[test]
+fn stdin_rejects_replay_options_before_opening_the_decoder() {
+    for flag in ["--loop", "--precompute"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_aski"))
+            .args(["-", flag])
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&result.stderr).contains("standard input is played once"));
+    }
+}
+
+#[test]
+#[ignore = "requires ffmpeg; run cargo test --test cli -- --include-ignored"]
+fn stdin_preserves_alpha_and_reports_bad_input() {
+    use std::io::{Cursor, Write};
+    use std::process::Stdio;
+
+    let run = |bytes: &[u8]| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_aski"))
+            .args(["-", "--verbose", "--reserve", "65535", "-b", "#0000ff"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let mut png = Cursor::new(Vec::new());
+    let pixels = image::RgbaImage::from_raw(1, 2, vec![255, 0, 0, 255, 0, 255, 0, 0]).unwrap();
+    image::DynamicImage::ImageRgba8(pixels)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let result = run(png.get_ref());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "{stderr}");
+    assert!(stderr.contains("1 displayed frames"));
+    assert!(
+        String::from_utf8_lossy(&result.stdout).contains("\x1b[38;2;255;0;0m\x1b[48;2;0;0;255m▀")
+    );
+
+    for bytes in [b"".as_slice(), b"not a media stream"] {
+        let result = run(bytes);
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("Cannot decode standard input"));
+    }
+}
+
+#[test]
 fn invalid_media_and_arguments_fail_without_panicking() {
     for ext in ["png", "gif", "mp4"] {
         let file = Fixture::new(ext);
